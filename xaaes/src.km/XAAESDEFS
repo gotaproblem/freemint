@@ -17,10 +17,17 @@ XAAESDEFS_col = -DGENERATE_DIAGS=0 -DDEBUG_CONTROL=0 -DBOOTLOG=1
 XAAESTARGET_02060 = xaaes020.km
 XAAESDEFS_02060 = -DGENERATE_DIAGS=0 -DDEBUG_CONTROL=0 -DBOOTLOG=1
 
+# Bespoke: a true 68040 build (-m68040 code generation) for the
+# PiStorm's 68040 - the stock target list stops at generic 020-60.
+# CPU_040/MODEL_040/CFLAGS_040 have always existed in RULES; XaAES
+# simply never declared a target that uses them.
+XAAESTARGET_040 = xaaes040.km
+XAAESDEFS_040 = -DGENERATE_DIAGS=0 -DDEBUG_CONTROL=0 -DBOOTLOG=1
+
 #
 # all default targets
 #
-xaaestargets = deb 000 sto col 02060
+xaaestargets = deb 000 sto col 02060 040
 
 all-kernels: $(xaaestargets)
 

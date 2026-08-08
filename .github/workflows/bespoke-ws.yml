@@ -40,6 +40,11 @@ jobs:
       - name: Build
         run: |
           ./.scripts/before_script.sh
+          # Bespoke: ALSO build the true 68040 XaAES (xaaes040.km,
+          # -m68040 code generation) alongside the stock 020-60 one.
+          # Appended AFTER before_script.sh because that script pins
+          # xaaestargets to CPU_TARGET; the last assignment wins.
+          echo "xaaestargets = 02060 040" >> ./xaaes/src.km/XAAESDEFS
           ./.scripts/build.sh
 
       - name: Collect kernel modules
