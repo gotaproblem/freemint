@@ -100,6 +100,7 @@ typedef enum xa_window_class WINDOW_CLASS;
 #define XAWS_FIRST			0x00004000UL
 #define XAWS_RESIZED		0x00008000UL		/* if WM_SIZED to XaAES-(list-)window, evaluate in draw_object_tree() */
 #define XAWS_RM_WDG			0x00010000UL
+#define XAWS_WSHIDDEN		0x00020000UL	/* hidden by a workspace switch (Bespoke) */
 #define XAWS_SEMA			0x80000000UL
 typedef unsigned long WINDOW_STATUS;
 
@@ -1517,6 +1518,7 @@ struct xa_window
 	short sw;			/* define middle of window (default 2 -> 1/2), used for resizing */
 	short sh;			/* height to use when SHADED */
 	short hx, hy;
+	short wdesk;			/* Bespoke workspace this window belongs to; -1 = sticky */
 
 	short handle;			/* Window handle */
 	short frame;			/* Size of the frame (0 for windowed listboxes) */

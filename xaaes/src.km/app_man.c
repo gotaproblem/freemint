@@ -698,6 +698,65 @@ find_menu(int lock, struct xa_client *client, short exclude)
 	return C.Aes;
 }
 
+/*
+ * Bespoke workspaces. Every window is tagged (wdesk, set in open_window)
+ * with the workspace current when it FIRST opened; -1 = sticky, visible
+ * everywhere. Switching hides the leavers through the very same
+ * hide_window() machinery user-hiding has always used, and unhides only
+ * what the switcher itself hid (XAWS_WSHIDDEN) - never a window the user
+ * or its app hid deliberately. System clients and clients that forbid
+ * hiding are left alone, as hide_app() has always done.
+ */
+
+short ws_current = 0;
+
+void
+ws_switch(int lock, short ws)
+{
+	struct xa_window *w;
+	struct xa_client *front = NULL;
+
+	if (ws < 0 || ws > 3 || ws == ws_current)
+		return;
+
+	ws_current = ws;
+
+	w = window_list;
+	while (w)
+	{
+		if (w == root_window)
+			break;
+
+		if (!w->nolist
+		    && w->wdesk >= 0
+		    && !(w->owner->type & APP_SYSTEM)
+		    && !(w->owner->swm_newmsg & NM_INHIBIT_HIDE))
+		{
+			if (w->wdesk != ws)
+			{
+				if ((w->window_status & XAWS_OPEN) && !is_hidden(w))
+				{
+					hide_window(lock, w);
+					w->window_status |= XAWS_WSHIDDEN;
+				}
+			} else if (w->window_status & XAWS_WSHIDDEN)
+			{
+				w->window_status &= ~XAWS_WSHIDDEN;
+				unhide_window(lock|LOCK_WINLIST, w, false);
+
+				if (!front)
+					front = w->owner;
+			}
+		}
+
+		w = w->next;
+	}
+
+	if (front)
+		app_in_front(lock, front, true, true, true);
+}
+
+
 void
 unhide_app(int lock, struct xa_client *client)
 {

@@ -1758,6 +1758,35 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 				ret = 0;
 			break;
 		}
+
+		/* Bespoke workspaces - private extension used by the Bespoke
+		 * Desktop (TeraDesk fork). Opcodes chosen well clear of the
+		 * MagiC APC_ range; a stock desktop never sends them and a
+		 * stock XaAES answers 0 (unknown), so both directions degrade
+		 * gracefully. addrin[0] carries the argument. */
+
+		case 100:						/* switch to workspace 0-3 */
+		{
+			ws_switch(lock, (short) pb->addrin[0]);
+			break;
+		}
+		case 101:						/* query current workspace */
+		{
+			ret = ws_current + 1;		/* 1-4; 0 would read as failure */
+			break;
+		}
+		case 103:						/* make own window (handle) sticky */
+		{
+			struct xa_window *w =
+				get_wind_by_handle(lock, (short) pb->addrin[0]);
+
+			if (w && w->owner == client)
+				w->wdesk = -1;
+			else
+				ret = 0;
+			break;
+		}
+
 		case APC_INFO:
 		{
 			if (cl)

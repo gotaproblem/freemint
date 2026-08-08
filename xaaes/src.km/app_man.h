@@ -40,6 +40,10 @@ void set_next_menu(struct xa_client *new, bool do_topwind, bool force);
 #define SWAPM_REMOVE	0x0004
 void swap_menu(int lock, struct xa_client *, struct widget_tree *, short); // bool, bool, int);
 void app_in_front(int lock, struct xa_client *client, bool snd_untopped, bool snd_ontop, bool all_winds);
+
+/* Bespoke workspaces */
+extern short ws_current;
+void ws_switch(int lock, short ws);
 bool is_infront(struct xa_client *client);
 struct xa_client * get_app_infront(void);
 struct xa_client * get_app_by_procname(char *name);

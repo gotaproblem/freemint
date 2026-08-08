@@ -1550,6 +1550,15 @@ open_window(int lock, struct xa_window *wind, GRECT r)
 		return 0;
 	}
 
+	/* Bespoke workspaces: a window belongs to the workspace that is
+	 * current the moment it first opens - the WINDOW, not the app, so
+	 * each console TOSWIN2 opens lands on the desk it was started from.
+	 * Sticky windows (wdesk = -1, set via appl_control 103) and system
+	 * clients are handled at switch time; see ws_switch() in app_man.c. */
+
+	if (wind != root_window && !wind->nolist && wind->wdesk >= 0)
+		wind->wdesk = ws_current;
+
 	if (wind->nolist || (wind->dial & created_for_SLIST))
 	{
 		DIAGS(("open_window: nolist window - SLIST wind? %s",
