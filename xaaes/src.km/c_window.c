@@ -694,7 +694,11 @@ show_toolboxwindows(struct xa_client *client)
 	while (wind)
 	{
 		nxt = wind->next;
-		if (wind->owner == client && (wind->window_status & XAWS_BELOWROOT))
+		/* Bespoke workspaces: windows hidden by a workspace switch
+		 * (XAWS_WSHIDDEN) are belowroot too, but belong to another
+		 * desk - app-in-front must NOT resurrect them. */
+		if (wind->owner == client && (wind->window_status & XAWS_BELOWROOT)
+		    && !(wind->window_status & XAWS_WSHIDDEN))
 		{
 			wi_move_first(&S.open_windows, wind);
 			wind->window_status &= ~XAWS_BELOWROOT;
@@ -724,6 +728,47 @@ show_toolboxwindows(struct xa_client *client)
 		wind = wind->next;
 	}
 	set_winmouse(-1, -1);
+}
+
+/*
+ * Bespoke workspaces: kernel-side per-window hide/show, needing NO
+ * cooperation from the owning client. hide_window() above is
+ * cooperative - the window only actually moves when its owner
+ * processes the WM_MOVED (Ozk's XXX note above it), so a busy client's
+ * window would stay painted on every workspace. These instead use the
+ * belowroot machinery the toolbox-window code above has proven for
+ * years: restack below the root window, rebuild rectangle lists and
+ * generate every redraw synchronously, right here in the kernel.
+ */
+
+void
+ws_hide_window(struct xa_window *wind)
+{
+	struct xa_window *wl = wind->next;
+
+	movewind_belowroot(wind);
+	wind->window_status |= XAWS_WSHIDDEN;
+	update_windows_below(0, &wind->r, NULL, wl, NULL);
+}
+
+void
+ws_unhide_window(struct xa_window *wind)
+{
+	struct xa_rect_list *rl;
+	GRECT clip;
+
+	wi_move_first(&S.open_windows, wind);
+	wind->window_status &= ~(XAWS_BELOWROOT | XAWS_WSHIDDEN);
+
+	make_rect_list(wind, true, RECT_SYS);
+	rl = wind->rect_list.start;
+	while (rl)
+	{
+		if (xa_rect_clip(&wind->r, &rl->r, &clip))
+			generate_redraws(0, wind, &clip, RDRW_ALL);
+		rl = rl->next;
+	}
+	update_windows_below(0, &wind->r, NULL, wind->next, NULL);
 }
 
 /*
@@ -1557,7 +1602,11 @@ open_window(int lock, struct xa_window *wind, GRECT r)
 	 * clients are handled at switch time; see ws_switch() in app_man.c. */
 
 	if (wind != root_window && !wind->nolist && wind->wdesk >= 0)
+	{
 		wind->wdesk = ws_current;
+		/* a stale switch-hidden bit must never survive a reopen */
+		wind->window_status &= ~XAWS_WSHIDDEN;
+	}
 
 	if (wind->nolist || (wind->dial & created_for_SLIST))
 	{
@@ -2011,9 +2060,26 @@ pull_wind_to_top(int lock, struct xa_window *w)
 	}
 	else if (!(w->owner->status & CS_EXITING))
 	{
+		bool wsret = false;
+
 		below = w->next;
 		above = w->prev;
 		r = w->r;
+
+		/* Bespoke workspaces: topping a workspace-hidden window pulls
+		 * it onto the CURRENT workspace - an app raising a dialog
+		 * while its desk is not in view must not hang invisibly. The
+		 * belowroot bit must clear BEFORE the rect lists rebuild
+		 * below, while the rebuild still takes the from-root path. */
+
+		if ((w->window_status & (XAWS_WSHIDDEN | XAWS_BELOWROOT))
+		            == (XAWS_WSHIDDEN | XAWS_BELOWROOT))
+		{
+			w->window_status &= ~(XAWS_WSHIDDEN | XAWS_BELOWROOT);
+			if (w->wdesk >= 0)
+				w->wdesk = ws_current;
+			wsret = true;
+		}
 
 		wi_move_first(&S.open_windows, w);
 		wl = window_list;
@@ -2022,7 +2088,7 @@ pull_wind_to_top(int lock, struct xa_window *w)
 		{
 			if (wl == w)
 			{
-				if (w->window_status & XAWS_BELOWROOT)
+				if (wsret || (w->window_status & XAWS_BELOWROOT))
 					wl = root_window;
 				else
 					wl = above;

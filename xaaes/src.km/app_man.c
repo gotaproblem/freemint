@@ -713,7 +713,7 @@ short ws_current = 0;
 void
 ws_switch(int lock, short ws)
 {
-	struct xa_window *w;
+	struct xa_window *w, *nxt;
 	struct xa_client *front = NULL;
 
 	if (ws < 0 || ws > 3 || ws == ws_current)
@@ -721,35 +721,47 @@ ws_switch(int lock, short ws)
 
 	ws_current = ws;
 
+	/* Pass 1: visible windows (above root) leaving this desk.
+	 * ws_hide_window() restacks belowroot and repaints synchronously,
+	 * entirely kernel-side - a busy client cannot ignore it the way
+	 * it can ignore the cooperative WM_MOVED of hide_window(). */
+
 	w = window_list;
-	while (w)
+	while (w && w != root_window)
 	{
-		if (w == root_window)
-			break;
+		nxt = w->next;
 
 		if (!w->nolist
 		    && w->wdesk >= 0
+		    && w->wdesk != ws
+		    && (w->window_status & XAWS_OPEN)
+		    && !is_hidden(w)
 		    && !(w->owner->type & APP_SYSTEM)
 		    && !(w->owner->swm_newmsg & NM_INHIBIT_HIDE))
 		{
-			if (w->wdesk != ws)
-			{
-				if ((w->window_status & XAWS_OPEN) && !is_hidden(w))
-				{
-					hide_window(lock, w);
-					w->window_status |= XAWS_WSHIDDEN;
-				}
-			} else if (w->window_status & XAWS_WSHIDDEN)
-			{
-				w->window_status &= ~XAWS_WSHIDDEN;
-				unhide_window(lock|LOCK_WINLIST, w, false);
-
-				if (!front)
-					front = w->owner;
-			}
+			ws_hide_window(w);
 		}
 
-		w = w->next;
+		w = nxt;
+	}
+
+	/* Pass 2: the arriving desk's windows sit BELOW the root window
+	 * in the list - the section pass 1 never reaches. */
+
+	w = root_window->next;
+	while (w)
+	{
+		nxt = w->next;
+
+		if ((w->window_status & XAWS_WSHIDDEN) && w->wdesk == ws)
+		{
+			ws_unhide_window(w);
+
+			if (!front)
+				front = w->owner;
+		}
+
+		w = nxt;
 	}
 
 	if (front)

@@ -112,6 +112,10 @@ void	unhide_window(int lock, struct xa_window *wind, bool check);
 void	hide_toolboxwindows(struct xa_client *client);
 void	show_toolboxwindows(struct xa_client *client);
 
+/* Bespoke workspaces: kernel-side, client-independent hide/show */
+void	ws_hide_window(struct xa_window *wind);
+void	ws_unhide_window(struct xa_window *wind);
+
 void	clear_wind_handles(void);
 //void	clear_wind_rectlist(struct xa_window *wind);
 
