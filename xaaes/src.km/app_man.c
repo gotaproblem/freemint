@@ -739,7 +739,7 @@ ws_switch(int lock, short ws)
 		    && !(w->owner->type & APP_SYSTEM)
 		    && !(w->owner->swm_newmsg & NM_INHIBIT_HIDE))
 		{
-			ws_hide_window(w);
+			ws_hide_window(lock, w);
 		}
 
 		w = nxt;
@@ -755,7 +755,7 @@ ws_switch(int lock, short ws)
 
 		if ((w->window_status & XAWS_WSHIDDEN) && w->wdesk == ws)
 		{
-			ws_unhide_window(w);
+			ws_unhide_window(lock, w);
 
 			if (!front)
 				front = w->owner;

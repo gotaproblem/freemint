@@ -742,20 +742,39 @@ show_toolboxwindows(struct xa_client *client)
  */
 
 void
-ws_hide_window(struct xa_window *wind)
+ws_hide_window(int lock, struct xa_window *wind)
 {
 	struct xa_window *wl = wind->next;
+	GRECT r = wind->rc;
 
 	movewind_belowroot(wind);
 	wind->window_status |= XAWS_WSHIDDEN;
 	update_windows_below(0, &wind->r, NULL, wl, NULL);
+
+	/* ALSO send the cooperative off-screen move that hide_window()
+	 * sends. The belowroot restack above has already done the real
+	 * hiding - this message is for well-behaved clients whose content
+	 * is composited OUTSIDE the GEM screen: the video player's
+	 * hardware overlay plane tracks the window rect its client
+	 * reports, so the picture must follow the window off the display.
+	 * A busy client ignores it harmlessly (it is belowroot
+	 * regardless), and the paired move-back in ws_unhide_window()
+	 * restores the net position either way. */
+
+	wind->hx = wind->rc.g_x;
+	wind->hy = wind->rc.g_y;
+	r.g_x = root_window->rc.g_x + root_window->rc.g_w + 16;
+	r.g_y = root_window->rc.g_y + root_window->rc.g_h + 16;
+	if (wind->opts & XAWO_WCOWORK)
+		r = f2w(&wind->delta, &r, true);
+	send_moved(lock, wind, AMQ_NORM, &r);
 }
 
 void
-ws_unhide_window(struct xa_window *wind)
+ws_unhide_window(int lock, struct xa_window *wind)
 {
 	struct xa_rect_list *rl;
-	GRECT clip;
+	GRECT clip, r;
 
 	wi_move_first(&S.open_windows, wind);
 	wind->window_status &= ~(XAWS_BELOWROOT | XAWS_WSHIDDEN);
@@ -769,6 +788,18 @@ ws_unhide_window(struct xa_window *wind)
 		rl = rl->next;
 	}
 	update_windows_below(0, &wind->r, NULL, wind->next, NULL);
+
+	/* The paired move-back. For a client that never processed the
+	 * hide move the coordinates are unchanged and this is a no-op;
+	 * for one that did (the video player) it brings the window - and
+	 * the overlay plane tracking it - back on screen. */
+
+	r = wind->rc;
+	r.g_x = wind->hx;
+	r.g_y = wind->hy;
+	if (wind->opts & XAWO_WCOWORK)
+		r = f2w(&wind->delta, &r, true);
+	send_moved(lock, wind, AMQ_NORM, &r);
 }
 
 /*
@@ -2075,10 +2106,21 @@ pull_wind_to_top(int lock, struct xa_window *w)
 		if ((w->window_status & (XAWS_WSHIDDEN | XAWS_BELOWROOT))
 		            == (XAWS_WSHIDDEN | XAWS_BELOWROOT))
 		{
+			GRECT mr;
+
 			w->window_status &= ~(XAWS_WSHIDDEN | XAWS_BELOWROOT);
 			if (w->wdesk >= 0)
 				w->wdesk = ws_current;
 			wsret = true;
+
+			/* undo the cooperative off-screen move of
+			 * ws_hide_window() - no-op if never processed */
+			mr = w->rc;
+			mr.g_x = w->hx;
+			mr.g_y = w->hy;
+			if (w->opts & XAWO_WCOWORK)
+				mr = f2w(&w->delta, &mr, true);
+			send_moved(lock, w, AMQ_NORM, &mr);
 		}
 
 		wi_move_first(&S.open_windows, w);
