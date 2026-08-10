@@ -803,6 +803,106 @@ ws_unhide_window(int lock, struct xa_window *wind)
 }
 
 /*
+ * Bespoke live UI config: read/apply a settings-page value at runtime,
+ * so the Bespoke Desktop's settings dialog can alter the look and feel
+ * without a reboot. Setting ids are shared with TeraDesk (opcodes
+ * 106 GET / 107 SET in xa_appl.c). Returns the value (get) or 1/0
+ * applied/unknown (apply).
+ */
+
+#define WSCFG_LEAVE_TOP	1				/* cfg.leave_top_border   (instant)  */
+#define WSCFG_NOLIVE	2				/* outline vs live move   (next drag)*/
+#define WSCFG_FRAME		3				/* frame width thinframe   (rebuild) */
+#define WSCFG_THINWORK	4				/* thin work-area border   (rebuild) */
+#define WSCFG_WHEEL		6				/* wheel scroll amount    (instant)  */
+#define WSCFG_POPUP_TO	7				/* popup timeout          (instant)  */
+#define WSCFG_NOLEFT	8				/* keep windows on-screen left */
+
+short
+ws_cfg_get(short id)
+{
+	switch (id)
+	{
+	case WSCFG_LEAVE_TOP:	return cfg.leave_top_border;
+	case WSCFG_NOLIVE:		return default_options.nolive;
+	case WSCFG_FRAME:		return default_options.thinframe;
+	case WSCFG_THINWORK:	return default_options.thinwork;
+	case WSCFG_WHEEL:		return cfg.ver_wheel_amount;
+	case WSCFG_POPUP_TO:	return cfg.popup_timeout;
+	case WSCFG_NOLEFT:		return default_options.noleft;
+	}
+	return -1;
+}
+
+short
+ws_cfg_apply(int lock, short id, short val)
+{
+	struct xa_window *w;
+
+	switch (id)
+	{
+	case WSCFG_LEAVE_TOP:
+		cfg.leave_top_border = val ? true : false;
+		return 1;						/* takes effect on the next drag */
+
+	case WSCFG_WHEEL:
+		cfg.ver_wheel_amount = val;
+		cfg.hor_wheel_amount = val;
+		return 1;
+
+	case WSCFG_POPUP_TO:
+		cfg.popup_timeout = val;
+		return 1;
+
+	case WSCFG_NOLIVE:
+		default_options.nolive = val ? true : false;
+		for (w = window_list; w && w != root_window; w = w->next)
+			if (w->owner)
+				w->owner->options.nolive = default_options.nolive;
+		return 1;
+
+	case WSCFG_NOLEFT:
+		default_options.noleft = val ? true : false;
+		for (w = window_list; w && w != root_window; w = w->next)
+			if (w->owner)
+				w->owner->options.noleft = default_options.noleft;
+		return 1;
+
+	case WSCFG_FRAME:
+	case WSCFG_THINWORK:
+		if (id == WSCFG_FRAME)
+			default_options.thinframe = val;
+		else
+			default_options.thinwork = val ? true : false;
+
+		/* Rebuild every open, listed window with the new frame/thinwork,
+		 * using XaAES's own widget re-apply path (as iconify/shade do). */
+
+		for (w = window_list; w && w != root_window; w = w->next)
+		{
+			if (w->nolist || !(w->window_status & XAWS_OPEN))
+				continue;
+
+			if (w->owner)
+			{
+				w->owner->options.thinframe = default_options.thinframe;
+				w->owner->options.thinwork = default_options.thinwork;
+			}
+
+			w->frame = default_options.thinframe;
+			w->thinwork = MONO ? true : default_options.thinwork;
+
+			standard_widgets(w, w->active_widgets, true);
+			set_and_update_window(w, true, false, NULL);
+		}
+		return 1;
+	}
+
+	return 0;
+}
+
+
+/*
  * ONLY call from from correct context
  */
 void

@@ -116,6 +116,10 @@ void	show_toolboxwindows(struct xa_client *client);
 void	ws_hide_window(int lock, struct xa_window *wind);
 void	ws_unhide_window(int lock, struct xa_window *wind);
 
+/* Bespoke live UI config (settings-page opcodes 106/107) */
+short	ws_cfg_get(short id);
+short	ws_cfg_apply(int lock, short id, short val);
+
 void	clear_wind_handles(void);
 //void	clear_wind_rectlist(struct xa_window *wind);
 

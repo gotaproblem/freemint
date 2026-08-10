@@ -1800,6 +1800,18 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			recover();
 			break;
 		}
+		case 106:						/* live-config GET: addrin[0] = id */
+		{
+			ret = ws_cfg_get((short) pb->addrin[0]);
+			break;
+		}
+		case 107:						/* live-config SET: addrin[0] = (id<<16)|val */
+		{
+			long a = (long) pb->addrin[0];
+
+			ret = ws_cfg_apply(lock, (short) (a >> 16), (short) (a & 0xFFFF));
+			break;
+		}
 
 		case APC_INFO:
 		{
