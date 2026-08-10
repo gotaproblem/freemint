@@ -1786,6 +1786,20 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 				ret = 0;
 			break;
 		}
+		case 104:						/* open the XaAES task manager */
+		{
+			/* same path the Ctrl+Alt+L hotkey takes (k_keybd.c) */
+			if (!C.update_lock)
+				post_cevent(C.Hlp, ceExecfunc, open_taskmanager, NULL, 1, 0, NULL, NULL);
+			else
+				ret = 0;
+			break;
+		}
+		case 105:						/* recover a hung GUI (= Ctrl+Alt+R) */
+		{
+			recover();
+			break;
+		}
 
 		case APC_INFO:
 		{
