@@ -119,6 +119,8 @@ void	ws_unhide_window(int lock, struct xa_window *wind);
 /* Bespoke live UI config (settings-page opcodes 106/107) */
 short	ws_cfg_get(short id);
 short	ws_cfg_apply(int lock, short id, short val);
+short	ws_gem_pen(long val);
+short	ws_gem_reset(void);
 
 void	clear_wind_handles(void);
 //void	clear_wind_rectlist(struct xa_window *wind);

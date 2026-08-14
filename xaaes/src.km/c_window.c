@@ -903,6 +903,60 @@ ws_cfg_apply(int lock, short id, short val)
 
 
 /*
+ * Bespoke theme, GEM chrome: remap one standard pen on XaAES's OWN
+ * workstation. At truecolour depths VDI palettes are per-workstation,
+ * so the desktop shell's vs_color cannot reach the window chrome
+ * (titles, borders, sliders) that XaAES draws - these two opcodes
+ * (108 set / 109 reset, xa_appl.c) let it push the same remap here.
+ *
+ * val packs everything in one long: 0xPPRRGGBB (pen 0-15 + RGB).
+ * The first touch of a pen captures its original colour; ws_gem_reset
+ * puts every touched pen back exactly, so cycling to the default
+ * theme is a perfect round trip. Mono screens: no-op.
+ */
+
+static struct rgb_1000 ws_pen_save[16];
+static unsigned short ws_pen_saved = 0;	/* bitmask of captured pens */
+
+short
+ws_gem_pen(long val)
+{
+	short pen = (short) ((val >> 24) & 0xff);
+	short rgb[3];
+
+	if (pen > 15 || screen.colours < 16)
+		return 0;
+
+	if (!(ws_pen_saved & (1 << pen)))
+	{
+		if (vq_color(global_vdi_settings.handle, pen, 0, (short *) &ws_pen_save[pen]) < 0)
+			return 0;
+		ws_pen_saved |= (unsigned short) (1 << pen);
+	}
+
+	rgb[0] = (short) (((val >> 16) & 0xff) * 1000L / 255L);
+	rgb[1] = (short) (((val >>  8) & 0xff) * 1000L / 255L);
+	rgb[2] = (short) (( val        & 0xff) * 1000L / 255L);
+
+	vs_color(global_vdi_settings.handle, pen, rgb);
+
+	return 1;
+}
+
+short
+ws_gem_reset(void)
+{
+	short i;
+
+	for (i = 0; i < 16; i++)
+		if (ws_pen_saved & (1 << i))
+			vs_color(global_vdi_settings.handle, i, (short *) &ws_pen_save[i]);
+
+	return 1;
+}
+
+
+/*
  * ONLY call from from correct context
  */
 void

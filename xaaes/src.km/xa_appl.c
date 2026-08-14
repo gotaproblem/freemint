@@ -1812,6 +1812,16 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			ret = ws_cfg_apply(lock, (short) (a >> 16), (short) (a & 0xFFFF));
 			break;
 		}
+		case 108:						/* theme GEM pen: addrin[0] = 0xPPRRGGBB */
+		{
+			ret = ws_gem_pen((long) pb->addrin[0]);
+			break;
+		}
+		case 109:						/* restore all themed GEM pens */
+		{
+			ret = ws_gem_reset();
+			break;
+		}
 
 		case APC_INFO:
 		{
