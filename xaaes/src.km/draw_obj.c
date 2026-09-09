@@ -31,6 +31,7 @@
 #include "obtree.h"
 #include "k_init.h"
 #include "render_obj.h"
+#include "render_apj.h"
 #include "trnfm.h"
 #include "rectlist.h"
 #include "c_window.h"
@@ -242,6 +243,79 @@ exit_client_objcrend(struct xa_client *client)
 		(*client->objcr_module->close)(client->objcr_api);
 		client->objcr_api = NULL;
 	}
+}
+
+/*
+ * APJ-OS: per-client renderer selection.
+ *
+ * XaAES already keeps the object renderer per client (xa_client.objcr_module,
+ * inherited from AESSYS in xa_appl.c). That makes a second renderer a matter of
+ * pointing selected clients at a different module - legacy GEM apps keep drawing
+ * through render_obj.c untouched, APJ-native clients get render_apj.c.
+ *
+ * The APJ module is brought up lazily on first use: init_module() is what hands
+ * the renderer its api/screen, and it must run exactly once per module, not once
+ * per client. If it fails we leave the client on the stock renderer rather than
+ * failing the client - a missing theme is not worth refusing to draw over.
+ */
+static struct xa_module_object_render *apj_objcr_module = NULL;
+static bool apj_objcr_tried = false;
+
+extern struct xa_module_api xam_api;
+
+static struct xa_module_object_render *
+get_apj_objcr_module(void)
+{
+	struct xa_module_object_render *m = NULL;
+
+	if (apj_objcr_tried)
+		return apj_objcr_module;
+
+	apj_objcr_tried = true;
+
+	main_object_render_apj(&m);
+	if (!m)
+	{
+		BLOG((true, "APJ objrender: no module"));
+		return NULL;
+	}
+
+#if WITH_GRADIENTS
+	if (!(*m->init_module)(&xam_api, &screen, cfg.gradients[0] != 0))
+#else
+	if (!(*m->init_module)(&xam_api, &screen, 0))
+#endif
+	{
+		BLOG((true, "APJ objrender: init_module failed"));
+		return NULL;
+	}
+
+	apj_objcr_module = m;
+	return m;
+}
+
+long
+client_use_apj_render(struct xa_client *client)
+{
+	struct xa_module_object_render *m;
+
+	if (!client)
+		return EBADARG;
+
+	m = get_apj_objcr_module();
+	if (!m)
+		return ENXIO;
+
+	if (client->objcr_module == m)
+		return E_OK;
+
+	/* drop whatever the client currently holds before swapping modules -
+	 * the theme and api belong to the old module and must be freed by it */
+	exit_client_objcrend(client);
+
+	client->objcr_module = m;
+
+	return init_client_objcrend(client);
 }
 
 void
