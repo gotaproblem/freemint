@@ -5474,6 +5474,10 @@ d_g_button(struct widget_tree *wt, struct xa_vdi_settings *v)
 	done(OS_SELECTED);
 }
 
+/* set by the icon drawers: 1 when the icon sits on the desktop
+ * background (the owner's desktop tree) rather than in a window */
+static short apj_icon_on_desktop = 0;
+
 static void
 icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk, short state, short obx, short oby, short icx, short icy)
 {
@@ -5529,6 +5533,15 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 				lb.g_h = iconblk->ib_htext;
 				apj_flat_box(v, &lb, APJ_PEN(APJ_R_SELBG), APJ_PEN(APJ_R_SELBG));
 				(*v->api->t_color)(v, APJ_PEN(APJ_R_SELFG));
+			}
+			else if (apj_icon_on_desktop)
+			{
+				/* on the wallpaper, which can be anything: white with a
+				 * one-pixel dark shadow, as the Windows desktop does */
+				(*v->api->wr_mode)(v, MD_TRANS);
+				(*v->api->t_color)(v, G_BLACK);
+				v_gtext(v->handle, tx + 1, ty + 1, iconblk->ib_ptext);
+				(*v->api->t_color)(v, G_WHITE);
 			}
 			else
 				(*v->api->t_color)(v, APJ_PEN(APJ_R_TEXT));
@@ -5756,6 +5769,7 @@ d_g_icon(struct widget_tree *wt, struct xa_vdi_settings *v)
 	}
 
 	/* should be the same for color & mono */
+	apj_icon_on_desktop = (wt->owner && wt->owner->desktop && wt->tree == wt->owner->desktop->tree) ? 1 : 0;
 	icon_characters(v, theme, iconblk, ob->ob_state & (OS_SELECTED|OS_DISABLED), obx, oby, ic.g_x, ic.g_y);
 
 	done(OS_SELECTED|OS_DISABLED);
@@ -5831,7 +5845,8 @@ d_g_cicon(struct widget_tree *wt, struct xa_vdi_settings *v)
 
 	vro_cpyfm(RASTER_HDL, blitmode, pxy, &Micon, &Mscreen);
 	if( iconblk->ib_char || *iconblk->ib_ptext )
-		icon_characters(v, theme, iconblk, ob->ob_state & (OS_SELECTED|OS_DISABLED), obx, oby, ic.g_x, ic.g_y);
+		apj_icon_on_desktop = (wt->owner && wt->owner->desktop && wt->tree == wt->owner->desktop->tree) ? 1 : 0;
+	icon_characters(v, theme, iconblk, ob->ob_state & (OS_SELECTED|OS_DISABLED), obx, oby, ic.g_x, ic.g_y);
 
 	if ((ob->ob_state & OS_DISABLED) || ((ob->ob_state & OS_SELECTED) && !have_sel))
 	{
