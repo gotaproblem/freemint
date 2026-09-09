@@ -4855,7 +4855,6 @@ static int
 apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, short ch, const char *t)
 {
 	const struct apj_atlas *at;
-	const unsigned char *s;
 	short w, h, fdw, n, i, yy, xx;
 	short pxy[8];
 	long size;
@@ -4872,8 +4871,10 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 		return 0;
 	}
 
-	for (s = (const unsigned char *) t, n = 0; *s; s++, n++)
-		;
+	/* strlen is the kernel-entry vector here; an open-coded loop gets
+	 * pattern-matched by gcc into a call to a libc strlen that a -nostdlib
+	 * module does not have */
+	n = (short) strlen(t);
 
 	if (!(at = apj_atlas_for(cw, ch)))
 	{
