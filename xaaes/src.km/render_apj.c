@@ -4722,6 +4722,21 @@ apj_theme_active(void)
 	return apj_active;
 }
 
+/* opcode 115: hand the theme's role RGBs to a client, 0xRRGGBB each */
+short
+apj_theme_query(long *rgb)
+{
+	int i;
+
+	if (!rgb || !apj_active)
+		return 0;
+	for (i = 0; i < APJ_R_N; i++)
+		rgb[i] = ((long) (apj_rgb[i].red   * 255L / 1000L) << 16) |
+		         ((long) (apj_rgb[i].green * 255L / 1000L) << 8) |
+		          (long) (apj_rgb[i].blue  * 255L / 1000L);
+	return APJ_R_N;
+}
+
 /*
  * ---------------------------------------------------------------------
  * Antialiased text

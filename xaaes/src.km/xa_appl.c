@@ -1854,6 +1854,11 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			apj_chrome_apply(lock, C.Hlp, 0);
 			break;
 		}
+		case 115:						/* APJ theme query: addrin[0] -> long[APJ_R_N] */
+		{
+			ret = apj_theme_query((long *) pb->addrin[0]);
+			break;
+		}
 		case 114:						/* APJ AA text: addrin[0] -> struct apj_textreq */
 		{
 			ret = apj_text_request(client, (struct apj_textreq *) pb->addrin[0]);

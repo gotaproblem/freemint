@@ -59,6 +59,7 @@ short apj_theme_set(long val);		/* opcode 111: (role<<24)|RGB; 1 ok, 0 bad */
 short apj_theme_reset(void);		/* opcode 112: back to the stock look */
 short apj_theme_active(void);		/* 1 while a theme is loaded */
 short apj_theme_commit(void);		/* opcode 113: apply to the object theme */
+short apj_theme_query(long *rgb);	/* opcode 115: APJ_R_N x 0xRRGGBB into rgb[]; 0 if no theme */
 
 /*
  * Opcode 114: draw antialiased text on the client's behalf. The desktop
