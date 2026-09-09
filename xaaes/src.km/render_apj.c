@@ -4547,6 +4547,12 @@ d_g_fboxtext(struct widget_tree *wt, struct xa_vdi_settings *v)
 static struct rgb_1000 apj_rgb[APJ_R_N];
 static short apj_active = 0;
 
+/* AA text state (see apj_gtext below) */
+static char *apj_tbuf = NULL;		/* read-back / blend buffer */
+static long  apj_tbuf_size = 0;
+static short apj_fgpen_cached = -1;	/* last foreground pen turned into pixel bytes */
+static unsigned char apj_fgpx[4];
+
 /*
  * The object theme (struct theme) is data too: one shared instance for
  * every client of this module (current_theme), holding per object type
@@ -4691,6 +4697,7 @@ apj_theme_set(long val)
 
 	vs_color(vs->handle, APJ_PEN(role), rgb);
 
+	apj_fgpen_cached = -1;		/* pen colours changed: re-probe */
 	apj_active = 1;
 	return 1;
 }
@@ -4730,10 +4737,6 @@ apj_theme_active(void)
  * ---------------------------------------------------------------------
  */
 
-static char *apj_tbuf = NULL;		/* read-back / blend buffer */
-static long  apj_tbuf_size = 0;
-static short apj_fgpen_cached = -1;	/* last foreground pen turned into pixel bytes */
-static unsigned char apj_fgpx[4];
 
 /*
  * The advance (cell width) must match exactly - that is the layout
@@ -4766,35 +4769,62 @@ apj_atlas_for(short cw, short ch)
 	return best;
 }
 
-/* the screen-format pixel for a pen: ask the VDI for its RGB, then let
- * create_gradient() (which knows every pixel format) lay one down */
+/*
+ * The screen-format pixel for a pen, found empirically: save one on-
+ * screen pixel, draw a 1x1 bar in the pen, read it back, put the saved
+ * pixel back. Done under a full-screen clip so a partial redraw cannot
+ * fool it, and cached per pen. This works whatever the pixel layout -
+ * XaAES's own detect_pixel_format() gives up (-1) on layouts it does
+ * not know, and create_gradient() then produces nothing, which is why
+ * the first version of this fell back silently.
+ */
 static int
-apj_fg_pixel(struct xa_vdi_settings *v, short pen)
+apj_fg_pixel(struct xa_vdi_settings *v, short pen, short x, short y)
 {
-	short rgb[3];
-	struct rgb_1000 c[2];
-	XAMFDB pm;
+	unsigned long saved = 0, probe = 0;
+	MFDB mone, mscr;
+	GRECT clip;
+	short pxy[8];
 
 	if (pen == apj_fgpen_cached)
 		return 1;
 
-	if (vq_color(v->handle, pen, 1, rgb) < 0)
-		return 0;
+	mone.fd_addr = &probe;
+	mone.fd_w = 16;
+	mone.fd_h = 1;
+	mone.fd_wdwidth = 1;
+	mone.fd_stand = 0;
+	mone.fd_nplanes = 32;
+	mone.fd_r1 = mone.fd_r2 = mone.fd_r3 = 0;
+	mscr.fd_addr = NULL;
 
-	c[0].red = c[1].red = rgb[0];
-	c[0].green = c[1].green = rgb[1];
-	c[0].blue = c[1].blue = rgb[2];
+	(*v->api->save_clip)(v, &clip);
+	(*v->api->set_clip)(v, &screen->r);
 
-	(*v->api->create_gradient)(&pm, c, 0, 0, NULL, 16, 1);
-	if (!pm.mfdb.fd_addr)
-		return 0;
+	pxy[0] = x; pxy[1] = y; pxy[2] = x; pxy[3] = y;
+	pxy[4] = 0; pxy[5] = 0; pxy[6] = 0; pxy[7] = 0;
+	mone.fd_addr = &saved;
+	vro_cpyfm(v->handle, S_ONLY, pxy, &mscr, &mone);	/* save */
 
-	apj_fgpx[0] = ((unsigned char *) pm.mfdb.fd_addr)[0];
-	apj_fgpx[1] = ((unsigned char *) pm.mfdb.fd_addr)[1];
-	apj_fgpx[2] = ((unsigned char *) pm.mfdb.fd_addr)[2];
-	apj_fgpx[3] = ((unsigned char *) pm.mfdb.fd_addr)[3];
-	(*api->kfree)(pm.mfdb.fd_addr);
+	(*v->api->wr_mode)(v, MD_REPLACE);
+	(*v->api->f_interior)(v, FIS_SOLID);
+	(*v->api->f_color)(v, pen);
+	(*v->api->bar)(v, 0, x, y, 1, 1);
 
+	mone.fd_addr = &probe;
+	vro_cpyfm(v->handle, S_ONLY, pxy, &mscr, &mone);	/* read the pen's pixel */
+
+	pxy[0] = 0; pxy[1] = 0; pxy[2] = 0; pxy[3] = 0;
+	pxy[4] = x; pxy[5] = y; pxy[6] = x; pxy[7] = y;
+	mone.fd_addr = &saved;
+	vro_cpyfm(v->handle, S_ONLY, pxy, &mone, &mscr);	/* restore */
+
+	(*v->api->restore_clip)(v, &clip);
+
+	apj_fgpx[0] = ((unsigned char *) &probe)[0];
+	apj_fgpx[1] = ((unsigned char *) &probe)[1];
+	apj_fgpx[2] = ((unsigned char *) &probe)[2];
+	apj_fgpx[3] = ((unsigned char *) &probe)[3];
 	apj_fgpen_cached = pen;
 	return 1;
 }
@@ -4844,9 +4874,13 @@ apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 	/* the read-back must be entirely on screen */
 	if (x < screen->r.g_x || y < screen->r.g_y ||
 	    x + w > screen->r.g_x + screen->r.g_w || y + h > screen->r.g_y + screen->r.g_h)
+	{
+		if (!logged++)
+			BLOG((0, "apj_gtext: no AA - text %d,%d %dx%d off screen", x, y, w, h));
 		return 0;
+	}
 
-	if (!apj_fg_pixel(v, fg))
+	if (!apj_fg_pixel(v, fg, x, y))
 		return 0;
 
 	fdw = (w + 15) & ~15;
