@@ -1838,6 +1838,16 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 				ret = 0;
 			break;
 		}
+		case 111:						/* APJ theme role: addrin[0] = (role<<24)|RRGGBB */
+		{
+			ret = apj_theme_set((long) pb->addrin[0]);
+			break;
+		}
+		case 112:						/* APJ theme off: render_apj draws the stock look */
+		{
+			ret = apj_theme_reset();
+			break;
+		}
 
 		case APC_INFO:
 		{

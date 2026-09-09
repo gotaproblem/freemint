@@ -4527,6 +4527,139 @@ d_g_fboxtext(struct widget_tree *wt, struct xa_vdi_settings *v)
 /*
  * Draw a button object
  */
+/*
+ * ---------------------------------------------------------------------
+ * APJ-OS Fluent
+ *
+ * apj_theme_set()/reset() are the receiving end of appl_control 111/112.
+ * While a theme is loaded (apj_active) the Fluent drawers below take
+ * over from the stock ones for the object types they cover; with none
+ * loaded this renderer draws exactly like render_obj.c.
+ * ---------------------------------------------------------------------
+ */
+
+static struct rgb_1000 apj_rgb[APJ_R_N];
+static short apj_active = 0;
+
+short
+apj_theme_set(long val)
+{
+	short role = (short) ((val >> 24) & 0xff);
+	struct xa_vdi_settings *vs = api->C->Aes->vdi_settings;
+	short rgb[3];
+
+	if (role < 0 || role >= APJ_R_N || screen->colours < 16 || !vs)
+		return 0;
+
+	rgb[0] = (short) (((val >> 16) & 0xff) * 1000L / 255L);
+	rgb[1] = (short) (((val >>  8) & 0xff) * 1000L / 255L);
+	rgb[2] = (short) (( val        & 0xff) * 1000L / 255L);
+
+	apj_rgb[role].red   = rgb[0];
+	apj_rgb[role].green = rgb[1];
+	apj_rgb[role].blue  = rgb[2];
+
+	vs_color(vs->handle, APJ_PEN(role), rgb);
+
+	apj_active = 1;
+	return 1;
+}
+
+short
+apj_theme_reset(void)
+{
+	apj_active = 0;
+	return 1;
+}
+
+/*
+ * A flat control: solid fill, 1px border. The border stops one pixel
+ * short of each corner, which at this size reads as a rounded corner
+ * without needing arcs - a real radius comes later with the RGB blit
+ * path (the fill here is a plain v_bar in a theme pen, which is why it
+ * is fast).
+ */
+
+static void
+apj_flat_box(struct xa_vdi_settings *v, const GRECT *r, short fill, short border)
+{
+	short x1 = r->g_x;
+	short y1 = r->g_y;
+	short x2 = r->g_x + r->g_w - 1;
+	short y2 = r->g_y + r->g_h - 1;
+	short c = (r->g_w > 2 && r->g_h > 2) ? 1 : 0;
+
+	(*v->api->wr_mode)(v, MD_REPLACE);
+	(*v->api->f_interior)(v, FIS_SOLID);
+	(*v->api->f_color)(v, fill);
+	(*v->api->gbar)(v, 0, r);
+
+	(*v->api->line)(v, x1 + c, y1, x2 - c, y1, border);
+	(*v->api->line)(v, x1 + c, y2, x2 - c, y2, border);
+	(*v->api->line)(v, x1, y1 + c, x1, y2 - c, border);
+	(*v->api->line)(v, x2, y1 + c, x2, y2 - c, border);
+}
+
+/*
+ * Fluent G_BUTTON. Replaces draw_objc_bkg() + the stock text pass for a
+ * plain push button (the checkbox / radio / group-frame reinterpretations
+ * still go the stock way for now).
+ *
+ *   normal    face fill, border, text
+ *   selected  pressed fill (the button is down)
+ *   default   accent fill, selection-text colour - Win11's accent button
+ *   disabled  face fill, disabled text; no stipple
+ *
+ * ob_text() is given fg AND bg explicitly: with fg alone it looks bg up
+ * in a 16-entry 3D table, and our pens are far past 15.
+ */
+
+static void
+apj_button(struct widget_tree *wt, struct xa_vdi_settings *v, struct color_theme *ct,
+	   GRECT *r, GRECT *gr, char *text, short und)
+{
+	OBJECT *ob = wt->current.ob;
+	ushort state = ob->ob_state;
+	short fill, fg;
+	struct color_theme lct = *ct;
+
+	if (state & OS_DISABLED)
+	{
+		fill = APJ_PEN(APJ_R_FACE);
+		fg   = APJ_PEN(APJ_R_DISABLED);
+	}
+	else if (state & OS_SELECTED)
+	{
+		fill = (ob->ob_flags & OF_DEFAULT) ? APJ_PEN(APJ_R_SELBG) : APJ_PEN(APJ_R_PRESSED);
+		fg   = (ob->ob_flags & OF_DEFAULT) ? APJ_PEN(APJ_R_SELFG) : APJ_PEN(APJ_R_TEXT);
+	}
+	else if (ob->ob_flags & OF_DEFAULT)
+	{
+		fill = APJ_PEN(APJ_R_ACCENT);
+		fg   = APJ_PEN(APJ_R_SELFG);
+	}
+	else
+	{
+		fill = APJ_PEN(APJ_R_FACE);
+		fg   = APJ_PEN(APJ_R_TEXT);
+	}
+
+	apj_flat_box(v, r, fill, APJ_PEN(APJ_R_BORDER));
+
+	if (text)
+	{
+		/* flat text: no 3D relief, no engraving on disabled */
+		lct.fnt.flags &= ~WTXT_DRAW3D;
+		lct.fnt.effects = 0;
+
+		(*v->api->wr_mode)(v, MD_TRANS);
+		ob_text(wt, v, NULL, &lct, gr, r, NULL, -1, fg, fg, -1, 0,0,0, text,
+			state & ~OS_DISABLED, 0, und, fg);
+	}
+
+	done(OS_SELECTED|OS_DISABLED);
+}
+
 static void _cdecl
 d_g_button(struct widget_tree *wt, struct xa_vdi_settings *v)
 {
@@ -4736,17 +4869,24 @@ d_g_button(struct widget_tree *wt, struct xa_vdi_settings *v)
 			thick = -thick;
 		}
 
-		draw_objc_bkg(wt, v, ct, NULL, DRAW_ALL | (fl3d ? DRAW_TEXTURE|ONLY_TEXTURE : 0), -1, -1, d, d3t, thick, 2, &r, &r, NULL);
-
-		if (text)
+		if (apj_active && !MONO)
 		{
-			if (selected)
+			apj_button(wt, v, ct, &r, &gr, text, und);
+		}
+		else
+		{
+			draw_objc_bkg(wt, v, ct, NULL, DRAW_ALL | (fl3d ? DRAW_TEXTURE|ONLY_TEXTURE : 0), -1, -1, d, d3t, thick, 2, &r, &r, NULL);
+
+			if (text)
 			{
-				gr.g_x += ct->fnt.x_3dact;
-				gr.g_y += ct->fnt.y_3dact;
+				if (selected)
+				{
+					gr.g_x += ct->fnt.x_3dact;
+					gr.g_y += ct->fnt.y_3dact;
+				}
+				(*v->api->wr_mode)(v, MD_TRANS);
+				ob_text(wt, v, NULL, ct, &gr, &r, NULL, -1, -1, -1, -1, 0,0,0, text, ob->ob_state, 0, und, G_BLACK);
 			}
-			(*v->api->wr_mode)(v, MD_TRANS);
-			ob_text(wt, v, NULL, ct, &gr, &r, NULL, -1, -1, -1, -1, 0,0,0, text, ob->ob_state, 0, und, G_BLACK);
 		}
 	}
 
