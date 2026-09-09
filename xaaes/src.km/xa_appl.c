@@ -1852,7 +1852,10 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 		case 113:						/* APJ theme committed: reskin this client's windows */
 		{
 			if (client_apj_chrome(client))
+			{
+				apj_theme_commit();
 				apj_chrome_apply(lock, client, 1);
+			}
 			else
 				ret = 0;
 			break;

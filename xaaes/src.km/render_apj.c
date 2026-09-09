@@ -4541,6 +4541,130 @@ d_g_fboxtext(struct widget_tree *wt, struct xa_vdi_settings *v)
 static struct rgb_1000 apj_rgb[APJ_R_N];
 static short apj_active = 0;
 
+/*
+ * The object theme (struct theme) is data too: one shared instance for
+ * every client of this module (current_theme), holding per object type
+ * a fill, box, 3D-edge and font colour for normal/selected/highlighted
+ * x enabled/disabled x four 3D variants. The Fluent look for menus,
+ * dialog boxes, text fields and labels is therefore a transform of that
+ * data onto the APJ pens, applied to the live instance. apj_stock_theme
+ * is the pristine copy (textures resolved) a theme drop restores from.
+ */
+
+static struct theme apj_stock_theme;
+static short apj_have_stock = 0;
+
+static void
+apj_flat_ct(struct color_theme *ct, short fill, short fg, short border)
+{
+	ct->col.flags &= ~(WCOL_DRAW3D|WCOL_ACT3D|WCOL_GRADIENT|WCOL_DRAWTEXTURE|WCOL_ONLYTEXTURE|WCOL_REV3D|WCOL_BOXBF3D|WCOL_BOXRND);
+	ct->col.flags |= WCOL_DRAWBKG;
+	ct->col.wr_mode = MD_REPLACE;
+	ct->col.c = fill;
+	ct->col.i = FIS_SOLID;
+	ct->col.f = 8;
+	ct->col.box_c = border;
+	ct->col.box_th = 1;
+	ct->col.top = ct->col.bottom = ct->col.left = ct->col.right = border;
+	/* texture pointer left alone - owned and refcounted by the module */
+#if WITH_GRADIENTS
+	ct->col.gradient = NULL;
+#endif
+	ct->fnt.flags &= ~(WTXT_DRAW3D|WTXT_ACT3D);
+	ct->fnt.effects = 0;
+	ct->fnt.fg = fg;
+	ct->fnt.bg = fg;
+	ct->fnt.bannercol = fill;
+	ct->fnt.x_3dact = 0;
+	ct->fnt.y_3dact = 0;
+}
+
+/* one object type: normal / selected / highlighted, enabled and disabled,
+ * all four 3D variants get the same flat treatment */
+static void
+apj_flat_obt(struct object_theme *ot, short fill, short sel_fill, short fg, short sel_fg, short border)
+{
+	int i;
+
+	for (i = 0; i < 4; i++)
+	{
+		apj_flat_ct(&ot->norm.n[i], fill,     fg,     border);
+		apj_flat_ct(&ot->norm.s[i], sel_fill, sel_fg, border);
+		apj_flat_ct(&ot->norm.h[i], sel_fill, sel_fg, border);
+		apj_flat_ct(&ot->dis.n[i],  fill,     APJ_PEN(APJ_R_DISABLED), border);
+		apj_flat_ct(&ot->dis.s[i],  sel_fill, APJ_PEN(APJ_R_DISABLED), border);
+		apj_flat_ct(&ot->dis.h[i],  sel_fill, APJ_PEN(APJ_R_DISABLED), border);
+	}
+	ot->norm.thick_3d = ot->norm.thick_3dact = 0;
+	ot->dis.thick_3d  = ot->dis.thick_3dact  = 0;
+}
+
+static void
+apj_flatten_theme(struct theme *t)
+{
+	short panel  = APJ_PEN(APJ_R_PANEL);
+	short paper  = APJ_PEN(APJ_R_PAPER);
+	short text   = APJ_PEN(APJ_R_TEXT);
+	short border = APJ_PEN(APJ_R_BORDER);
+	short press  = APJ_PEN(APJ_R_PRESSED);
+	short selbg  = APJ_PEN(APJ_R_SELBG);
+	short selfg  = APJ_PEN(APJ_R_SELFG);
+
+	t->shadow_col = APJ_PEN(APJ_R_ELEVATION);
+	t->ad3dval_x = t->ad3dval_y = 0;
+
+	t->outline.flags &= ~(WCOL_DRAW3D|WCOL_ACT3D|WCOL_GRADIENT);
+	t->outline.c = border;
+	t->outline.box_c = border;
+	t->outline.top = t->outline.bottom = t->outline.left = t->outline.right = border;
+
+	/* push buttons have their own drawer; this covers the data path */
+	apj_flat_obt(&t->button,     APJ_PEN(APJ_R_FACE), press, text, text, border);
+
+	/* dialog surface and labels */
+	apj_flat_obt(&t->box,        panel, panel, text, text, border);
+	apj_flat_obt(&t->string,     panel, selbg, text, selfg, border);
+	apj_flat_obt(&t->groupframe, panel, panel, text, text, border);
+
+	/* text and edit fields: paper white, thin border */
+	apj_flat_obt(&t->text,       paper, selbg, text, selfg, border);
+	apj_flat_obt(&t->ed_text,    paper, selbg, text, selfg, border);
+	apj_flat_obt(&t->boxtext,    paper, selbg, text, selfg, border);
+	apj_flat_obt(&t->ed_boxtext, paper, selbg, text, selfg, border);
+
+	/* menus: bar and titles on the panel, a pressed-grey highlight;
+	 * drop-down and popup entries on paper with the same grey highlight -
+	 * Win11 does not paint menu selection in the accent colour */
+	apj_flat_obt(&t->menubar,    panel, panel, text, text, border);
+	apj_flat_obt(&t->title,      panel, press, text, text, border);
+	apj_flat_obt(&t->pu_string,  paper, press, text, text, border);
+	apj_flat_obt(&t->popupbkg,   paper, paper, text, text, border);
+
+	/* extobj (checkbox / radio glyphs) come from the resource: untouched */
+}
+
+static void
+apj_restore_theme(struct theme *t)
+{
+	struct xa_data_hdr h = t->h;
+
+	if (!apj_have_stock)
+		return;
+	*t = apj_stock_theme;
+	t->h = h;
+}
+
+/* opcode 113: every role is in - apply to the live object theme */
+short
+apj_theme_commit(void)
+{
+	if (!apj_active)
+		return 0;
+	if (current_theme)
+		apj_flatten_theme(current_theme);
+	return 1;
+}
+
 short
 apj_theme_set(long val)
 {
@@ -4569,6 +4693,8 @@ short
 apj_theme_reset(void)
 {
 	apj_active = 0;
+	if (current_theme)
+		apj_restore_theme(current_theme);
 	return 1;
 }
 
@@ -5948,6 +6074,14 @@ new_theme(void **themeptr)
 					*current_theme = stdtheme;
 				(*api->add_xa_data)(&allocs, current_theme, 0, NULL, delete_theme);
 				load_textures(current_theme);
+
+				/* APJ-OS: keep the stock look (textures resolved) so a
+				 * theme drop can restore it exactly, and apply the Fluent
+				 * look now if a theme is already loaded */
+				apj_stock_theme = *current_theme;
+				apj_have_stock = 1;
+				if (apj_active)
+					apj_flatten_theme(current_theme);
 			}
 		}
 

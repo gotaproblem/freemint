@@ -54,5 +54,6 @@ enum
 short apj_theme_set(long val);		/* opcode 111: (role<<24)|RGB; 1 ok, 0 bad */
 short apj_theme_reset(void);		/* opcode 112: back to the stock look */
 short apj_theme_active(void);		/* 1 while a theme is loaded */
+short apj_theme_commit(void);		/* opcode 113: apply to the object theme */
 
 #endif /* _render_apj_h_ */
