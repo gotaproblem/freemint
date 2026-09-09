@@ -4735,15 +4735,35 @@ static long  apj_tbuf_size = 0;
 static short apj_fgpen_cached = -1;	/* last foreground pen turned into pixel bytes */
 static unsigned char apj_fgpx[4];
 
+/*
+ * The advance (cell width) must match exactly - that is the layout
+ * contract. The height only has to be close: vqt_extent's box for a
+ * bitmap font can differ from the nominal cell by a line or two, so
+ * take the atlas whose height is nearest, and blend that many rows.
+ */
 static const struct apj_atlas *
 apj_atlas_for(short cw, short ch)
 {
+	const struct apj_atlas *best = NULL;
+	short bestd = 4;	/* tolerate up to 3 rows of difference */
 	int i;
 
 	for (i = 0; i < APJ_N_ATLASES; i++)
-		if (apj_atlases[i].cw == cw && apj_atlases[i].ch == ch)
-			return &apj_atlases[i];
-	return NULL;
+	{
+		short d;
+
+		if (apj_atlases[i].cw != cw)
+			continue;
+		d = apj_atlases[i].ch - ch;
+		if (d < 0)
+			d = -d;
+		if (d < bestd)
+		{
+			bestd = d;
+			best = &apj_atlases[i];
+		}
+	}
+	return best;
 }
 
 /* the screen-format pixel for a pen: ask the VDI for its RGB, then let
@@ -4813,12 +4833,13 @@ apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 	if (!(at = apj_atlas_for(cw, ch)))
 	{
 		if (!logged++)
-			BLOG((0, "apj_gtext: no AA - font cell %dx%d has no atlas (have 8x16 10x20 12x24 16x32); c_max %dx%d", cw, ch, screen->c_max_w, screen->c_max_h));
+			BLOG((0, "apj_gtext: no AA - font cell %dx%d has no atlas (have widths 8-14,16 at 2:1); c_max %dx%d", cw, ch, screen->c_max_w, screen->c_max_h));
 		return 0;
 	}
 
 	w = n * cw;
-	h = ch;
+	h = at->ch;
+	ch = at->ch;
 
 	/* the read-back must be entirely on screen */
 	if (x < screen->r.g_x || y < screen->r.g_y ||
