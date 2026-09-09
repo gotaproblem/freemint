@@ -20,6 +20,10 @@ void main_object_render_apj(struct xa_module_object_render **);
  */
 long client_use_apj_render(struct xa_client *client);
 
+/* 1 when this client is drawn by render_apj AND a theme is loaded -
+ * i.e. its window chrome should be Fluent too. */
+short client_apj_chrome(struct xa_client *client);
+
 /*
  * The APJ theme: one RGB per role, pushed by the desktop through
  * appl_control opcode 111 as (role << 24) | 0xRRGGBB, cleared by 112.
@@ -49,5 +53,6 @@ enum
 
 short apj_theme_set(long val);		/* opcode 111: (role<<24)|RGB; 1 ok, 0 bad */
 short apj_theme_reset(void);		/* opcode 112: back to the stock look */
+short apj_theme_active(void);		/* 1 while a theme is loaded */
 
 #endif /* _render_apj_h_ */

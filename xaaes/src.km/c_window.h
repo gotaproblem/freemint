@@ -121,6 +121,7 @@ short	ws_cfg_get(short id);
 short	ws_cfg_apply(int lock, short id, short val);
 short	ws_gem_pen(long val);
 short	ws_gem_reset(void);
+void	apj_chrome_apply(int lock, struct xa_client *client, short on);
 
 void	clear_wind_handles(void);
 //void	clear_wind_rectlist(struct xa_window *wind);

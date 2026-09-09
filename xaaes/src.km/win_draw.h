@@ -29,5 +29,16 @@
 void main_xa_theme(struct xa_module_widget_theme **xmt);
 void free_widg_grad(const struct xa_module_api *_api);
 
+/*
+ * APJ-OS Fluent window chrome. The chrome is pure data - a struct
+ * window_colours per window - so the Fluent look is a rewrite of that
+ * data in place, not a second widget module. on = 1 flattens the set
+ * onto the APJ theme pens (render_apj.h); on = 0 restores the stock set
+ * for the window class. Texture pointers are never touched, so the
+ * module's texture refcounts stay balanced either way.
+ */
+
+void apj_chrome_colours(void *wcols, short on, short ontop, short win_class);
+
 
 #endif /* _wind_draw_h */

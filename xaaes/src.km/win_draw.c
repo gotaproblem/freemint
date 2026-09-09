@@ -27,6 +27,7 @@
 #include "win_draw.h"
 #include "rectlist.h"
 #include "gradients.h"
+#include "render_apj.h"
 
 extern struct config cfg;
 
@@ -3931,6 +3932,149 @@ delete_color_theme(void *_ctheme)
 	(*api->kfree)(_ctheme);
 }
 
+
+/*
+ * ---------------------------------------------------------------------
+ * APJ-OS Fluent chrome
+ *
+ * Windows 11 draws its frame as one flat surface: title bar the same
+ * colour as the panel, a 1px border, no bevels, no gradients, gadgets
+ * that only show a fill when hovered or pressed, and an inactive window
+ * told apart by greyed title text rather than a different bar colour.
+ * All of that is expressible in struct window_colours, so this is a
+ * transform of the data, not new drawing code.
+ * ---------------------------------------------------------------------
+ */
+
+static void
+apj_flat_wcol(struct xa_wcol *c, short fill, short sel, short hi, short border, int which)
+{
+	c->c = which == 0 ? fill : which == 1 ? sel : hi;
+	c->i = FIS_SOLID;
+	c->f = 8;
+	c->box_c = border;
+	c->box_th = 1;
+	c->tlc = border;
+	c->brc = border;
+	/* texture pointer deliberately left alone: refcounted by the module */
+#if WITH_GRADIENTS
+	c->gradient = NULL;
+#endif
+}
+
+static void
+apj_flat_inf(struct xa_wcol_inf *wi, short fill, short sel, short hi, short border, short boxed)
+{
+	wi->flags &= ~(WCOL_DRAW3D|WCOL_ACT3D|WCOL_GRADIENT|WCOL_DRAWTEXTURE|WCOL_ONLYTEXTURE|WCOL_REV3D|WCOL_BOXBF3D|WCOL_BOXRND);
+	wi->flags |= WCOL_DRAWBKG;
+	if (boxed)
+		wi->flags |= WCOL_BOXED;
+	else
+		wi->flags &= ~WCOL_BOXED;
+	wi->wr_mode = MD_REPLACE;
+	apj_flat_wcol(&wi->normal,      fill, sel, hi, border, 0);
+	apj_flat_wcol(&wi->selected,    fill, sel, hi, border, 1);
+	apj_flat_wcol(&wi->highlighted, fill, sel, hi, border, 2);
+}
+
+static void
+apj_flat_txt(struct xa_wtxt_inf *t, short fg)
+{
+	struct xa_fnt_info *f[3];
+	int i;
+
+	t->flags &= ~(WTXT_DRAW3D|WTXT_ACT3D);
+	f[0] = &t->normal; f[1] = &t->selected; f[2] = &t->highlighted;
+	for (i = 0; i < 3; i++)
+	{
+		f[i]->fg = fg;
+		f[i]->bg = fg;
+		f[i]->bannercol = fg;
+		f[i]->effects = 0;
+		f[i]->x_3dact = 0;
+		f[i]->y_3dact = 0;
+	}
+}
+
+static const struct window_colours *
+apj_stock_set(short win_class, short ontop)
+{
+	if (MONO)
+		return ontop ? &mono_def_otop_cols : &mono_def_utop_cols;
+	switch (win_class)
+	{
+#ifndef ST_ONLY
+		case WINCLASS_ALERT: return ontop ? &alert_def_otop_cols : &alert_def_utop_cols;
+		case WINCLASS_SLIST: return ontop ? &slist_def_otop_cols : &slist_def_utop_cols;
+#endif
+		default:             return ontop ? &def_otop_cols : &def_utop_cols;
+	}
+}
+
+void
+apj_chrome_colours(void *wcols, short on, short ontop, short win_class)
+{
+	struct window_colours *wc = wcols;
+
+	if (!wc)
+		return;
+
+	if (!on || MONO)
+	{
+		/* back to the stock set for the class, keeping the data header
+		 * (it is the module's allocation record) and the texture pointers
+		 * the set was created with (same pointers - same refs) */
+		const struct window_colours *src = apj_stock_set(win_class, ontop);
+		struct xa_data_hdr h = wc->h;
+
+		*wc = *src;
+		wc->h = h;
+		if (win_class == WINCLASS_SLIST)
+			wc->info_txt.flags |= WTXT_NOCLIP;
+		return;
+	}
+
+	{
+		short panel  = APJ_PEN(APJ_R_PANEL);
+		short titbg  = APJ_PEN(APJ_R_TITBG);
+		short border = APJ_PEN(APJ_R_BORDER);
+		short hover  = APJ_PEN(APJ_R_HOVER);
+		short press  = APJ_PEN(APJ_R_PRESSED);
+		short thumb  = APJ_PEN(APJ_R_DISABLED);	/* Win11 scrollbar thumb: mid grey */
+		short titfg  = ontop ? APJ_PEN(APJ_R_TITFG) : APJ_PEN(APJ_R_DISABLED);
+
+		wc->waframe_col = border;
+		wc->frame_col   = border;
+
+		/* areas not covered by a widget, and the frame */
+		apj_flat_inf(&wc->win,     panel, panel, panel, border, 0);
+		apj_flat_inf(&wc->borders, panel, panel, panel, border, 1);
+
+		/* scrollbars: flat track, grey thumb */
+		apj_flat_inf(&wc->hslider, panel, panel, panel, border, 0);
+		apj_flat_inf(&wc->vslider, panel, panel, panel, border, 0);
+		apj_flat_inf(&wc->hslide,  thumb, press, hover, thumb,  0);
+		apj_flat_inf(&wc->vslide,  thumb, press, hover, thumb,  0);
+
+		/* title bar and info line share the panel surface */
+		apj_flat_inf(&wc->title, titbg, titbg, titbg, border, 0);
+		apj_flat_inf(&wc->info,  panel, panel, panel, border, 0);
+
+		/* gadgets: invisible until hovered / pressed */
+		apj_flat_inf(&wc->closer,    titbg, press, hover, border, 0);
+		apj_flat_inf(&wc->hider,     titbg, press, hover, border, 0);
+		apj_flat_inf(&wc->iconifier, titbg, press, hover, border, 0);
+		apj_flat_inf(&wc->fuller,    titbg, press, hover, border, 0);
+		apj_flat_inf(&wc->sizer,     panel, press, hover, border, 0);
+		apj_flat_inf(&wc->uparrow,   panel, press, hover, border, 0);
+		apj_flat_inf(&wc->dnarrow,   panel, press, hover, border, 0);
+		apj_flat_inf(&wc->lfarrow,   panel, press, hover, border, 0);
+		apj_flat_inf(&wc->rtarrow,   panel, press, hover, border, 0);
+
+		apj_flat_txt(&wc->title_txt, titfg);
+		apj_flat_txt(&wc->info_txt,  APJ_PEN(APJ_R_TEXT));
+	}
+}
 
 static long _cdecl
 new_color_theme(void *_module, short win_class, void **ontop, void **untop)

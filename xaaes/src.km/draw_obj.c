@@ -318,6 +318,13 @@ client_use_apj_render(struct xa_client *client)
 	return init_client_objcrend(client);
 }
 
+short
+client_apj_chrome(struct xa_client *client)
+{
+	return (client && apj_objcr_module && client->objcr_module == apj_objcr_module
+		&& apj_theme_active()) ? 1 : 0;
+}
+
 void
 adjust_size(short d, GRECT *r)
 {

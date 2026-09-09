@@ -4572,6 +4572,12 @@ apj_theme_reset(void)
 	return 1;
 }
 
+short
+apj_theme_active(void)
+{
+	return apj_active;
+}
+
 /*
  * A flat control: solid fill, 1px border. The border stops one pixel
  * short of each corner, which at this size reads as a rounded corner

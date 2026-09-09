@@ -1846,6 +1846,15 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 		case 112:						/* APJ theme off: render_apj draws the stock look */
 		{
 			ret = apj_theme_reset();
+			apj_chrome_apply(lock, client, 0);
+			break;
+		}
+		case 113:						/* APJ theme committed: reskin this client's windows */
+		{
+			if (client_apj_chrome(client))
+				apj_chrome_apply(lock, client, 1);
+			else
+				ret = 0;
 			break;
 		}
 

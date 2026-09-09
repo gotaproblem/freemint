@@ -32,6 +32,8 @@
 #include "k_mouse.h"
 #include "menuwidg.h"
 #include "draw_obj.h"
+#include "render_apj.h"
+#include "win_draw.h"
 #include "rectlist.h"
 #include "scrlobjc.h"
 #include "widgets.h"
@@ -943,6 +945,30 @@ ws_gem_pen(long val)
 	return 1;
 }
 
+/*
+ * APJ-OS: (re)skin every window this client owns after its theme
+ * changed - opcode 113 (theme committed) or 112 (theme dropped). The
+ * colour sets are rewritten in place and the window redrawn whole,
+ * frame included, through the normal redraw path.
+ */
+void
+apj_chrome_apply(int lock, struct xa_client *client, short on)
+{
+	struct xa_window *w;
+
+	for (w = window_list; w && w != root_window; w = w->next)
+	{
+		if (w->owner != client)
+			continue;
+
+		apj_chrome_colours(w->ontop_cols, on, 1, w->class);
+		apj_chrome_colours(w->untop_cols, on, 0, w->class);
+
+		if (!w->nolist && (w->window_status & XAWS_OPEN))
+			generate_redraws(lock, w, &w->r, RDRW_ALL);
+	}
+}
+
 short
 ws_gem_reset(void)
 {
@@ -1528,6 +1554,14 @@ create_window(
 	w->active_theme->links++;
 
 	(*client->xmwt->new_color_theme)(client->wtheme_handle, w->class, &w->ontop_cols, &w->untop_cols);
+
+	/* APJ-OS: a client on render_apj with a theme loaded gets Fluent chrome */
+	if (client_apj_chrome(client))
+	{
+		apj_chrome_colours(w->ontop_cols, 1, 1, w->class);
+		apj_chrome_colours(w->untop_cols, 1, 0, w->class);
+	}
+
 	w->colours = w->ontop_cols;
 
 	w->wheel_mode = client->options.wheel_mode;
