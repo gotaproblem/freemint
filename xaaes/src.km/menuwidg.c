@@ -24,6 +24,7 @@
 
 #include "xaaes.h"
 #include "menuwidg.h"
+#include "render_apj.h"
 #include "xa_global.h"
 
 #include "about.h"
@@ -102,6 +103,28 @@ menu_spec(OBJECT *obtree, int item)
 	}
 }
 
+/*
+ * APJ-OS: menus are system chrome whoever owns the tree. While the
+ * desktop's theme is live they draw with the APJ renderer (AESSYS is on
+ * it whenever the theme is), otherwise with the owner's. Called before
+ * every menu draw so a theme switch takes effect at once and a legacy
+ * app's menu never flips the bar back to the old look.
+ */
+static void
+apj_menu_objcr(XA_TREE *wt)
+{
+	if (client_apj_chrome(C.Aes) && C.Aes->objcr_api && C.Aes->objcr_theme)
+	{
+		wt->objcr_api = C.Aes->objcr_api;
+		wt->objcr_theme = C.Aes->objcr_theme;
+	}
+	else if (wt->owner)
+	{
+		wt->objcr_api = wt->owner->objcr_api;
+		wt->objcr_theme = wt->owner->objcr_theme;
+	}
+}
+
 static void
 change_title(Tab *tab, int state)
 {
@@ -117,6 +140,7 @@ change_title(Tab *tab, int state)
 
 	obtree->ob_x = k->rdx;
 	obtree->ob_y = k->rdy;
+	apj_menu_objcr(wt);
 	wt->rend_flags |= WTR_ROOTMENU;
 	obj_change(wt,
 		   C.Aes->vdi_settings,
@@ -150,6 +174,7 @@ change_entry(Tab *tab, int state)
 
 	obtree->ob_x = k->pdx;
 	obtree->ob_y = k->pdy;
+	apj_menu_objcr(wt);
 
 	if (k->p.wind)
 	{
@@ -184,6 +209,7 @@ redraw_entry(Tab *tab, short t)
 
 	obtree->ob_x = k->pdx;
 	obtree->ob_y = k->pdy;
+	apj_menu_objcr(wt);
 
 	if (k->p.wind)
 	{
@@ -2144,10 +2170,19 @@ Display_menu_widg(struct xa_window *wind, struct xa_widget *widg, const GRECT *c
 {
 	XA_TREE *wt = widg->stuff.wt;
 	OBJECT *obtree;
+	struct object_render_api *save_api = wt->objcr_api;
+	void *save_theme = wt->objcr_theme;
 
 	assert(wt);
 	obtree = rp_2_ap(wind, widg, &widg->ar);
 	assert(obtree);
+
+	/* APJ-OS: the menu bar and its drop-downs are system chrome, whoever
+	 * owns the tree. While the desktop's theme is live they are drawn
+	 * with the APJ renderer even for a legacy client - same objects, same
+	 * layout, only the look - so the bar does not flip style with the
+	 * top application. AESSYS is on render_apj whenever the theme is. */
+	apj_menu_objcr(wt);
 
 	if (wind->dial & created_for_POPUP)
 	{
@@ -2176,6 +2211,9 @@ Display_menu_widg(struct xa_window *wind, struct xa_widget *widg, const GRECT *c
 		wt->rend_flags &= ~WTR_ROOTMENU;
 		(*wt->objcr_api->write_menu_line)(wind->vdi_settings, &widg->ar);	/* HR: not in standard menu's object tree */
 	}
+
+	wt->objcr_api = save_api;
+	wt->objcr_theme = save_theme;
 }
 
 static void
@@ -2534,8 +2572,11 @@ set_popup_widget(Tab *tab, struct xa_window *wind, int obj)
 	wt->widg = widg;
 	wt->links++;
 	wt->zen = true;
+	/* APJ-OS: drop-downs and popups are system chrome too - see
+	 * Display_menu_widg() */
 	wt->objcr_api = tab->client->objcr_api;
 	wt->objcr_theme = tab->client->objcr_theme;
+	apj_menu_objcr(wt);
 
 	if (frame < 0)
 		frame = 0;
