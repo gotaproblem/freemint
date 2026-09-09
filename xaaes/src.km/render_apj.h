@@ -24,6 +24,10 @@ long client_use_apj_render(struct xa_client *client);
  * i.e. its window chrome should be Fluent too. */
 short client_apj_chrome(struct xa_client *client);
 
+/* Swap an AES-internal client (C.Aes, C.Hlp) between the stock and APJ
+ * renderers without closing either - see draw_obj.c. */
+long sys_client_apj_render(struct xa_client *client, short on);
+
 /*
  * The APJ theme: one RGB per role, pushed by the desktop through
  * appl_control opcode 111 as (role << 24) | 0xRRGGBB, cleared by 112.

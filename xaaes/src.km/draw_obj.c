@@ -318,6 +318,88 @@ client_use_apj_render(struct xa_client *client)
 	return init_client_objcrend(client);
 }
 
+/*
+ * The AES's own clients (AESSYS, the helper) draw the system UI - the
+ * file selector, task manager, alerts. They should follow the desktop's
+ * theme, but they have long-lived widget trees holding copies of their
+ * objcr_api pointer, so their renderer cannot be closed and reopened
+ * the way a fresh client's can. Instead the stock and APJ api/theme
+ * pairs are both kept and the client's pointers swapped between them:
+ * trees built before the swap keep drawing with the pair they hold,
+ * trees built after (every file selector is built on open) get the new
+ * one. Nothing is freed while anything might still point at it.
+ */
+struct sys_render_save
+{
+	struct xa_client *client;
+	struct object_render_api *stock_api, *apj_api;
+	void *stock_theme, *apj_theme;
+};
+static struct sys_render_save sys_render[2];
+
+static struct sys_render_save *
+sys_render_slot(struct xa_client *client)
+{
+	int i;
+
+	for (i = 0; i < 2; i++)
+		if (sys_render[i].client == client)
+			return &sys_render[i];
+	for (i = 0; i < 2; i++)
+		if (!sys_render[i].client)
+		{
+			sys_render[i].client = client;
+			return &sys_render[i];
+		}
+	return NULL;
+}
+
+long
+sys_client_apj_render(struct xa_client *client, short on)
+{
+	struct sys_render_save *sv;
+	struct xa_module_object_render *apj;
+
+	if (!client)
+		return EBADARG;
+	if (!(sv = sys_render_slot(client)))
+		return ENXIO;
+
+	if (on)
+	{
+		if (!(apj = get_apj_objcr_module()))
+			return ENXIO;
+		if (client->objcr_module == apj)
+			return E_OK;
+
+		sv->stock_api = client->objcr_api;
+		sv->stock_theme = client->objcr_theme;
+		client->objcr_module = apj;
+		client->objcr_api = sv->apj_api;		/* NULL first time: init opens one */
+		client->objcr_theme = sv->apj_theme;
+		if (init_client_objcrend(client))
+		{
+			client->objcr_api = sv->stock_api;
+			client->objcr_theme = sv->stock_theme;
+			main_object_render(&client->objcr_module);
+			return ENXIO;
+		}
+		sv->apj_api = client->objcr_api;
+		sv->apj_theme = client->objcr_theme;
+	}
+	else
+	{
+		if (!apj_objcr_module || client->objcr_module != apj_objcr_module)
+			return E_OK;
+		sv->apj_api = client->objcr_api;
+		sv->apj_theme = client->objcr_theme;
+		main_object_render(&client->objcr_module);
+		client->objcr_api = sv->stock_api;
+		client->objcr_theme = sv->stock_theme;
+	}
+	return E_OK;
+}
+
 short
 client_apj_chrome(struct xa_client *client)
 {

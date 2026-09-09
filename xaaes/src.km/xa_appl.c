@@ -1847,6 +1847,11 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 		{
 			ret = apj_theme_reset();
 			apj_chrome_apply(lock, client, 0);
+			/* the system UI follows the desktop back to the stock look */
+			sys_client_apj_render(C.Aes, 0);
+			sys_client_apj_render(C.Hlp, 0);
+			apj_chrome_apply(lock, C.Aes, 0);
+			apj_chrome_apply(lock, C.Hlp, 0);
 			break;
 		}
 		case 114:						/* APJ AA text: addrin[0] -> struct apj_textreq */
@@ -1860,6 +1865,12 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			{
 				apj_theme_commit();
 				apj_chrome_apply(lock, client, 1);
+				/* and the system UI - file selector, task manager,
+				 * alerts - drawn by the AES's own clients */
+				if (sys_client_apj_render(C.Aes, 1) == E_OK)
+					apj_chrome_apply(lock, C.Aes, 1);
+				if (sys_client_apj_render(C.Hlp, 1) == E_OK)
+					apj_chrome_apply(lock, C.Hlp, 1);
 			}
 			else
 				ret = 0;
