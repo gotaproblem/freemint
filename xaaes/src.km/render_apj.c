@@ -4733,6 +4733,108 @@ apj_flat_box(struct xa_vdi_settings *v, const GRECT *r, short fill, short border
 }
 
 /*
+ * Fluent checkbox: a square with a 1px border on paper; selected fills
+ * it with the accent and draws a white tick. Sized to the resource glyph
+ * it replaces so dialog layout is unchanged.
+ */
+static void
+apj_checkbox(struct xa_vdi_settings *v, short x, short y, short w, short h, short selected, short disabled)
+{
+	GRECT r;
+	short fill, border, mark;
+	short sz = w < h ? w : h;
+
+	r.g_x = x; r.g_y = y + ((h - sz) >> 1); r.g_w = sz; r.g_h = sz;
+
+	if (disabled)
+	{
+		fill   = selected ? APJ_PEN(APJ_R_DISABLED) : APJ_PEN(APJ_R_PAPER);
+		border = APJ_PEN(APJ_R_DISABLED);
+		mark   = APJ_PEN(APJ_R_PAPER);
+	}
+	else if (selected)
+	{
+		fill = border = APJ_PEN(APJ_R_ACCENT);
+		mark = APJ_PEN(APJ_R_SELFG);
+	}
+	else
+	{
+		fill   = APJ_PEN(APJ_R_PAPER);
+		border = APJ_PEN(APJ_R_TEXT);
+		mark   = fill;
+	}
+
+	apj_flat_box(v, &r, fill, border);
+
+	if (selected)
+	{
+		/* tick: short stroke down-right, long stroke up-right, 2px wide */
+		short x0 = r.g_x + (sz * 22) / 100;
+		short y0 = r.g_y + (sz * 50) / 100;
+		short x1 = r.g_x + (sz * 42) / 100;
+		short y1 = r.g_y + (sz * 72) / 100;
+		short x2 = r.g_x + (sz * 78) / 100;
+		short y2 = r.g_y + (sz * 28) / 100;
+
+		(*v->api->line)(v, x0, y0, x1, y1, mark);
+		(*v->api->line)(v, x0, y0 + 1, x1, y1 + 1, mark);
+		(*v->api->line)(v, x1, y1, x2, y2, mark);
+		(*v->api->line)(v, x1, y1 + 1, x2, y2 + 1, mark);
+	}
+}
+
+/*
+ * Fluent radio: a 1px ring on paper; selected is an accent ring with a
+ * white interior and an accent dot. Drawn with filled circles inside
+ * one another - no arc primitives needed.
+ */
+static void
+apj_circle(struct xa_vdi_settings *v, short cx, short cy, short rad, short col)
+{
+	if (rad < 0)
+		return;
+	(*v->api->f_interior)(v, FIS_SOLID);
+	(*v->api->f_perimeter)(v, 0);
+	(*v->api->f_color)(v, col);
+	v_circle(v->handle, cx, cy, rad);
+}
+
+static void
+apj_radio(struct xa_vdi_settings *v, short x, short y, short w, short h, short selected, short disabled)
+{
+	short sz = w < h ? w : h;
+	short rad = (sz - 1) >> 1;
+	short cx = x + rad;
+	short cy = y + ((h - sz) >> 1) + rad;
+	short ring, inner, dot;
+
+	if (disabled)
+	{
+		ring  = APJ_PEN(APJ_R_DISABLED);
+		inner = APJ_PEN(APJ_R_PAPER);
+		dot   = APJ_PEN(APJ_R_DISABLED);
+	}
+	else if (selected)
+	{
+		ring  = APJ_PEN(APJ_R_ACCENT);
+		inner = APJ_PEN(APJ_R_PAPER);
+		dot   = APJ_PEN(APJ_R_ACCENT);
+	}
+	else
+	{
+		ring  = APJ_PEN(APJ_R_TEXT);
+		inner = APJ_PEN(APJ_R_PAPER);
+		dot   = inner;
+	}
+
+	(*v->api->wr_mode)(v, MD_REPLACE);
+	apj_circle(v, cx, cy, rad, ring);
+	apj_circle(v, cx, cy, rad - 1, inner);
+	if (selected)
+		apj_circle(v, cx, cy, rad - 4, dot);
+}
+
+/*
  * Fluent G_BUTTON. Replaces draw_objc_bkg() + the stock text pass for a
  * plain push button (the checkbox / radio / group-frame reinterpretations
  * still go the stock way for now).
@@ -4920,7 +5022,17 @@ d_g_button(struct widget_tree *wt, struct xa_vdi_settings *v)
 			if (gr.g_h != h)
 				gr.g_y += ((gr.g_h - h) >> 1);
 
-			(*api->render_object)(&b, v, xobj, gr.g_x, gr.g_y);
+			if (apj_active && !MONO)
+			{
+				short dis = (ob->ob_state & OS_DISABLED) ? 1 : 0;
+
+				if (ob->ob_flags & OF_RBUTTON)
+					apj_radio(v, gr.g_x, gr.g_y, w, h, selected ? 1 : 0, dis);
+				else
+					apj_checkbox(v, gr.g_x, gr.g_y, w, h, selected ? 1 : 0, dis);
+			}
+			else
+				(*api->render_object)(&b, v, xobj, gr.g_x, gr.g_y);
 			if (text)
 			{
 				short undcol;
