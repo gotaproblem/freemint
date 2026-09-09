@@ -97,6 +97,16 @@
 
 static short _cdecl obj_thickness(struct widget_tree *wt, OBJECT *ob);
 static int apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t);	/* AA text, defined below */
+
+/* APJ-OS theme state - used by drawers throughout, defined early */
+static struct rgb_1000 apj_rgb[APJ_R_N];
+static short apj_active = 0;
+
+/* AA text state (see apj_gtext below) */
+static char *apj_tbuf = NULL;		/* read-back / blend buffer */
+static long  apj_tbuf_size = 0;
+static short apj_fgpen_cached = -1;	/* last foreground pen turned into pixel bytes */
+static unsigned char apj_fgpx[4];
 static void _cdecl obj_offsets(struct widget_tree *wt, OBJECT *ob, GRECT *c);
 
 static bool use_gradients = true;
@@ -4547,14 +4557,6 @@ d_g_fboxtext(struct widget_tree *wt, struct xa_vdi_settings *v)
  * ---------------------------------------------------------------------
  */
 
-static struct rgb_1000 apj_rgb[APJ_R_N];
-static short apj_active = 0;
-
-/* AA text state (see apj_gtext below) */
-static char *apj_tbuf = NULL;		/* read-back / blend buffer */
-static long  apj_tbuf_size = 0;
-static short apj_fgpen_cached = -1;	/* last foreground pen turned into pixel bytes */
-static unsigned char apj_fgpx[4];
 
 /*
  * The object theme (struct theme) is data too: one shared instance for
