@@ -96,6 +96,7 @@
 
 
 static short _cdecl obj_thickness(struct widget_tree *wt, OBJECT *ob);
+static int apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t);	/* AA text, defined below */
 static void _cdecl obj_offsets(struct widget_tree *wt, OBJECT *ob, GRECT *c);
 
 static bool use_gradients = true;
