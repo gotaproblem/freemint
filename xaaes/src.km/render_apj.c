@@ -4793,8 +4793,17 @@ apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 	long size;
 	MFDB msrc, mscr;
 
-	if (!apj_active || !t || !*t || screen->planes != 32)
+	static short logged = 0;
+
+	if (!apj_active || !t || !*t)
 		return 0;
+
+	if (screen->planes != 32)
+	{
+		if (!logged++)
+			BLOG((0, "apj_gtext: no AA - screen is %d planes (need 32), pixel_fmt %d", screen->planes, screen->pixel_fmt));
+		return 0;
+	}
 
 	for (s = (const unsigned char *) t, n = 0; *s; s++, n++)
 		if (*s < 32 || *s > 126)
@@ -4802,7 +4811,11 @@ apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 
 	(*v->api->t_extent)(v, "M", &cw, &ch);
 	if (!(at = apj_atlas_for(cw, ch)))
+	{
+		if (!logged++)
+			BLOG((0, "apj_gtext: no AA - font cell %dx%d has no atlas (have 8x16 10x20 12x24 16x32); c_max %dx%d", cw, ch, screen->c_max_w, screen->c_max_h));
 		return 0;
+	}
 
 	w = n * cw;
 	h = ch;
