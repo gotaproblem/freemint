@@ -32,6 +32,7 @@ HEADER = \
 	ob_inlines.h \
 	obtree.h \
 	rectlist.h \
+	apj_atlas.h \
 	render_apj.h \
 	render_obj.h \
 	scrlobjc.h \

@@ -48,6 +48,7 @@
 #include "xa_types.h"
 #include "render_obj.h"
 #include "render_apj.h"
+#include "apj_atlas.h"
 #include "global.h"
 #include "mint/stat.h"
 #include "xa_xtobj.h"
@@ -2977,7 +2978,8 @@ ob_text(XA_TREE *wt,
 					v_gtext(v->handle, x+1, y+1, s);
 				}
 				(*v->api->t_color)(v, fg);
-				v_gtext(v->handle, x, y, s);
+				if (!apj_gtext(v, x, r->g_y, fg, s))
+					v_gtext(v->handle, x, y, s);
 				(*v->api->t_extent)(v, s, &w, &h);
 				x += w;
 			}
@@ -2996,7 +2998,8 @@ ob_text(XA_TREE *wt,
 				v_gtext(v->handle, x, y, s);
 			}
 			(*v->api->t_color)(v, mfgc);
-			v_gtext(v->handle, x, y, s);
+			if (!apj_gtext(v, x, r->g_y, mfgc, s))
+				v_gtext(v->handle, x, y, s);
 
 			if (sl > end)
 			{
@@ -3009,7 +3012,8 @@ ob_text(XA_TREE *wt,
 					v_gtext(v->handle, x+1, y+1, s);
 				}
 				(*v->api->t_color)(v, fg);
-				v_gtext(v->handle, x, y, s);
+				if (!apj_gtext(v, x, r->g_y, fg, s))
+					v_gtext(v->handle, x, y, s);
 			}
 		}
 		else
@@ -3022,7 +3026,8 @@ ob_text(XA_TREE *wt,
 					v_gtext(v->handle, r->g_x + 1, r->g_y + 1 - v->dists[5], t);
 				}
 				(*v->api->t_color)(v, fg);
-				v_gtext(v->handle, r->g_x, r->g_y - v->dists[5], t);
+				if (!apj_gtext(v, r->g_x, r->g_y, fg, t))
+					v_gtext(v->handle, r->g_x, r->g_y - v->dists[5], t);
 			}
 		}
 		/* Now underline the shortcut character, if any. */
@@ -4705,6 +4710,175 @@ apj_theme_active(void)
 }
 
 /*
+ * ---------------------------------------------------------------------
+ * Antialiased text
+ *
+ * Route: build-time glyph atlas + software blend, entirely inside this
+ * renderer. mkatlas.py renders DejaVu Sans Mono into 8-bit coverage
+ * maps, one glyph per system-font cell (8x16, 10x20, 12x24, 16x32), so
+ * the advance is exactly the bitmap font's and legacy dialog layout is
+ * untouched ("same advance, or no AA"). At draw time the destination
+ * rectangle is read back from the screen, the glyphs are blended over
+ * it in the screen's own pixel format, and the result is blitted back.
+ * Nothing in fVDI or the emulator is involved, and legacy clients on
+ * render_obj never see it.
+ *
+ * Applies only at 32 bpp; anywhere it cannot apply (other depths, a
+ * cell size with no atlas, non-ASCII, off-screen) it falls back to
+ * v_gtext, so it is never the reason text goes missing.
+ * ---------------------------------------------------------------------
+ */
+
+static char *apj_tbuf = NULL;		/* read-back / blend buffer */
+static long  apj_tbuf_size = 0;
+static short apj_fgpen_cached = -1;	/* last foreground pen turned into pixel bytes */
+static unsigned char apj_fgpx[4];
+
+static const struct apj_atlas *
+apj_atlas_for(short cw, short ch)
+{
+	int i;
+
+	for (i = 0; i < APJ_N_ATLASES; i++)
+		if (apj_atlases[i].cw == cw && apj_atlases[i].ch == ch)
+			return &apj_atlases[i];
+	return NULL;
+}
+
+/* the screen-format pixel for a pen: ask the VDI for its RGB, then let
+ * create_gradient() (which knows every pixel format) lay one down */
+static int
+apj_fg_pixel(struct xa_vdi_settings *v, short pen)
+{
+	short rgb[3];
+	struct rgb_1000 c[2];
+	XAMFDB pm;
+
+	if (pen == apj_fgpen_cached)
+		return 1;
+
+	if (vq_color(v->handle, pen, 1, rgb) < 0)
+		return 0;
+
+	c[0].red = c[1].red = rgb[0];
+	c[0].green = c[1].green = rgb[1];
+	c[0].blue = c[1].blue = rgb[2];
+
+	(*v->api->create_gradient)(&pm, c, 0, 0, NULL, 16, 1);
+	if (!pm.mfdb.fd_addr)
+		return 0;
+
+	apj_fgpx[0] = ((unsigned char *) pm.mfdb.fd_addr)[0];
+	apj_fgpx[1] = ((unsigned char *) pm.mfdb.fd_addr)[1];
+	apj_fgpx[2] = ((unsigned char *) pm.mfdb.fd_addr)[2];
+	apj_fgpx[3] = ((unsigned char *) pm.mfdb.fd_addr)[3];
+	(*api->kfree)(pm.mfdb.fd_addr);
+
+	apj_fgpen_cached = pen;
+	return 1;
+}
+
+/*
+ * Draw t with its top-left cell corner at (x, y) in pen fg. Returns 0
+ * (nothing drawn) when the caller should use v_gtext instead.
+ */
+static int
+apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
+{
+	const struct apj_atlas *at;
+	const unsigned char *s;
+	short cw, ch, w, h, fdw, n, i, yy, xx;
+	short pxy[8];
+	long size;
+	MFDB msrc, mscr;
+
+	if (!apj_active || !t || !*t || screen->planes != 32)
+		return 0;
+
+	for (s = (const unsigned char *) t, n = 0; *s; s++, n++)
+		if (*s < 32 || *s > 126)
+			return 0;
+
+	(*v->api->t_extent)(v, "M", &cw, &ch);
+	if (!(at = apj_atlas_for(cw, ch)))
+		return 0;
+
+	w = n * cw;
+	h = ch;
+
+	/* the read-back must be entirely on screen */
+	if (x < screen->r.g_x || y < screen->r.g_y ||
+	    x + w > screen->r.g_x + screen->r.g_w || y + h > screen->r.g_y + screen->r.g_h)
+		return 0;
+
+	if (!apj_fg_pixel(v, fg))
+		return 0;
+
+	fdw = (w + 15) & ~15;
+	size = (long) fdw * h * 4;
+	if (size > apj_tbuf_size)
+	{
+		if (apj_tbuf)
+			(*api->kfree)(apj_tbuf);
+		apj_tbuf = (*api->kmalloc)(size);
+		apj_tbuf_size = apj_tbuf ? size : 0;
+		if (!apj_tbuf)
+			return 0;
+	}
+
+	msrc.fd_addr = apj_tbuf;
+	msrc.fd_w = fdw;
+	msrc.fd_h = h;
+	msrc.fd_wdwidth = fdw >> 4;
+	msrc.fd_stand = 0;
+	msrc.fd_nplanes = 32;
+	msrc.fd_r1 = msrc.fd_r2 = msrc.fd_r3 = 0;
+	mscr.fd_addr = NULL;
+
+	/* screen -> buffer */
+	pxy[0] = x; pxy[1] = y; pxy[2] = x + w - 1; pxy[3] = y + h - 1;
+	pxy[4] = 0; pxy[5] = 0; pxy[6] = w - 1;     pxy[7] = h - 1;
+	vro_cpyfm(v->handle, S_ONLY, pxy, &mscr, &msrc);
+
+	/* blend the glyphs in */
+	for (i = 0; i < n; i++)
+	{
+		const unsigned char *cov = at->cov + (long) ((unsigned char) t[i] - 32) * ch * cw;
+		unsigned char *col = (unsigned char *) apj_tbuf + (long) i * cw * 4;
+
+		for (yy = 0; yy < ch; yy++)
+		{
+			unsigned char *p = col + (long) yy * fdw * 4;
+
+			for (xx = 0; xx < cw; xx++, p += 4)
+			{
+				unsigned short a = *cov++;
+
+				if (a == 0)
+					continue;
+				if (a == 255)
+				{
+					p[0] = apj_fgpx[0]; p[1] = apj_fgpx[1];
+					p[2] = apj_fgpx[2]; p[3] = apj_fgpx[3];
+					continue;
+				}
+				p[0] += (unsigned char) (((short) apj_fgpx[0] - p[0]) * a >> 8);
+				p[1] += (unsigned char) (((short) apj_fgpx[1] - p[1]) * a >> 8);
+				p[2] += (unsigned char) (((short) apj_fgpx[2] - p[2]) * a >> 8);
+				p[3] += (unsigned char) (((short) apj_fgpx[3] - p[3]) * a >> 8);
+			}
+		}
+	}
+
+	/* buffer -> screen (the VDI clip applies here) */
+	pxy[0] = 0; pxy[1] = 0; pxy[2] = w - 1;     pxy[3] = h - 1;
+	pxy[4] = x; pxy[5] = y; pxy[6] = x + w - 1; pxy[7] = y + h - 1;
+	vro_cpyfm(v->handle, S_ONLY, pxy, &msrc, &mscr);
+
+	return 1;
+}
+
+/*
  * A flat control: solid fill, 1px border. The border stops one pixel
  * short of each corner, which at this size reads as a rounded corner
  * without needing arcs - a real radius comes later with the RGB blit
@@ -6031,6 +6205,12 @@ static long _cdecl
 exit_module(void)
 {
 	DIAGS(("exit_module:"));
+	if (apj_tbuf)
+	{
+		(*api->kfree)(apj_tbuf);
+		apj_tbuf = NULL;
+		apj_tbuf_size = 0;
+	}
 	(*api->free_xa_data_list)(&allocs);
 	(*api->free_xa_data_list)(&pmaps);
 	current_render_api = NULL;
