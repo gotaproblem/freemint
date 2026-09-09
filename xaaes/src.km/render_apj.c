@@ -4868,7 +4868,7 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 	}
 
 	for (s = (const unsigned char *) t, n = 0; *s; s++, n++)
-		if (*s < 32 || *s > 126)
+		if (apj_atlas_slot(*s) < 0)
 			return 0;
 
 	if (!(at = apj_atlas_for(cw, ch)))
@@ -4923,7 +4923,7 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 	/* blend the glyphs in */
 	for (i = 0; i < n; i++)
 	{
-		const unsigned char *cov = at->cov + (long) ((unsigned char) t[i] - 32) * ch * cw;
+		const unsigned char *cov = at->cov + (long) apj_atlas_slot((unsigned char) t[i]) * ch * cw;
 		unsigned char *col = (unsigned char *) apj_tbuf + (long) i * cw * 4;
 
 		for (yy = 0; yy < ch; yy++)
