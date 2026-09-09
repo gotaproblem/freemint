@@ -5040,11 +5040,14 @@ apj_text_request(struct xa_client *client, struct apj_textreq *rq)
 	clip.g_w = rq->clip[2] - rq->clip[0] + 1;
 	clip.g_h = rq->clip[3] - rq->clip[1] + 1;
 
+	/* No hidem()/showm() here. The caller is inside its own redraw with
+	 * the mouse already off (graf_mouse M_OFF), and an extra hide/show
+	 * pair from the AES side moved the pointer as seen by the VDI's
+	 * motion vector - the desktop's hover tooltips closed the instant
+	 * they were drawn. The client owns the mouse state; we just draw. */
 	(*v->api->save_clip)(v, &saved);
 	(*v->api->set_clip)(v, &clip);
-	hidem();
 	ret = apj_gtext_cell(v, rq->x, rq->y, rq->pen, rq->cw, rq->ch, rq->s) ? 1 : 0;
-	showm();
 	(*v->api->restore_clip)(v, &saved);
 
 	return ret;
