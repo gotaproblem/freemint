@@ -35,6 +35,7 @@
 #include "messages.h"
 #include "menuwidg.h"
 #include "draw_obj.h"
+#include "render_apj.h"
 #include "sys_proc.h"
 #include "taskman.h"
 #include "util.h"
@@ -1820,6 +1821,21 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 		case 109:						/* restore all themed GEM pens */
 		{
 			ret = ws_gem_reset();
+			break;
+		}
+		case 110:						/* draw this client with the APJ-OS renderer */
+		{
+			/* Self only, deliberately: switching a renderer tears down the
+			 * client's object api and theme (they belong to the old module)
+			 * and rebuilds them from the new one, so it is not something one
+			 * app should be able to do to another. Call it at startup, before
+			 * opening windows - already-drawn objects are not repainted here.
+			 *
+			 * Returns 0 if the APJ module is unavailable, in which case the
+			 * client stays on the stock renderer and should theme itself the
+			 * legacy way (opcodes 108/109). */
+			if (client_use_apj_render(client) != E_OK)
+				ret = 0;
 			break;
 		}
 
