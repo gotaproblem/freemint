@@ -4871,8 +4871,7 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 	}
 
 	for (s = (const unsigned char *) t, n = 0; *s; s++, n++)
-		if (apj_atlas_slot(*s) < 0)
-			return 0;
+		;
 
 	if (!(at = apj_atlas_for(cw, ch)))
 	{
@@ -4881,18 +4880,38 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 		return 0;
 	}
 
-	w = n * cw;
 	h = at->ch;
 	ch = at->ch;
 
-	/* the read-back must be entirely on screen */
-	if (x < screen->r.g_x || y < screen->r.g_y ||
-	    x + w > screen->r.g_x + screen->r.g_w || y + h > screen->r.g_y + screen->r.g_h)
+	/* Vertically the cell must be on screen. Horizontally, trim the
+	 * string to the screen: a directory line is composed to its full
+	 * width whatever the window shows, and windows hang off the right
+	 * edge all the time. */
+	if (y < screen->r.g_y || y + h > screen->r.g_y + screen->r.g_h)
 	{
 		if (!logged++)
-			BLOG((0, "apj_gtext: no AA - text %d,%d %dx%d off screen", x, y, w, h));
+			BLOG((0, "apj_gtext: no AA - text row %d h %d off screen", y, h));
 		return 0;
 	}
+	if (x < screen->r.g_x)
+	{
+		short skip = (screen->r.g_x - x + cw - 1) / cw;
+
+		if (skip >= n)
+			return 1;			/* nothing visible: drawn, trivially */
+		t += skip;
+		n -= skip;
+		x += skip * cw;
+	}
+	{
+		short room = (screen->r.g_x + screen->r.g_w - x) / cw;
+
+		if (room <= 0)
+			return 1;
+		if (n > room)
+			n = room;
+	}
+	w = n * cw;
 
 	if (!apj_fg_pixel(v, fg, x, y))
 		return 0;
@@ -4923,11 +4942,16 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 	pxy[4] = 0; pxy[5] = 0; pxy[6] = w - 1;     pxy[7] = h - 1;
 	vro_cpyfm(v->handle, S_ONLY, pxy, &mscr, &msrc);
 
-	/* blend the glyphs in */
+	/* blend the glyphs in; a glyph the atlas lacks is left for v_gtext below */
 	for (i = 0; i < n; i++)
 	{
-		const unsigned char *cov = at->cov + (long) apj_atlas_slot((unsigned char) t[i]) * ch * cw;
+		short slot = apj_atlas_slot((unsigned char) t[i]);
+		const unsigned char *cov;
 		unsigned char *col = (unsigned char *) apj_tbuf + (long) i * cw * 4;
+
+		if (slot < 0)
+			continue;
+		cov = at->cov + (long) slot * ch * cw;
 
 		for (yy = 0; yy < ch; yy++)
 		{
@@ -4957,6 +4981,21 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 	pxy[0] = 0; pxy[1] = 0; pxy[2] = w - 1;     pxy[3] = h - 1;
 	pxy[4] = x; pxy[5] = y; pxy[6] = x + w - 1; pxy[7] = y + h - 1;
 	vro_cpyfm(v->handle, S_ONLY, pxy, &msrc, &mscr);
+
+	/* glyphs the atlas lacks: the bitmap font, one cell at a time */
+	for (i = 0; i < n; i++)
+	{
+		if (apj_atlas_slot((unsigned char) t[i]) < 0)
+		{
+			char one[2];
+
+			one[0] = t[i];
+			one[1] = '\0';
+			(*v->api->wr_mode)(v, MD_TRANS);
+			(*v->api->t_color)(v, fg);
+			v_gtext(v->handle, x + i * cw, y - v->dists[5], one);
+		}
+	}
 
 	return 1;
 }

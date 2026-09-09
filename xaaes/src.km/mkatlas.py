@@ -10,6 +10,7 @@ FIRST, LAST = 32, 126
 # Atari ST charset extras the desktop uses, as (atari_code, unicode) pairs.
 # They are appended after 126 in the atlas; the C side maps code -> slot.
 EXTRA = [(0xF8, 0x00B0),   # degree sign
+         (0x07, 0x25C6),   # Atari char 7: the folder marker (diamond)
          (0xB0, 0x00E3),   # a tilde
          (0xB1, 0x00F5),   # o tilde
          (0xDD, 0x00A7),   # section
