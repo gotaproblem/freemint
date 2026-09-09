@@ -56,4 +56,24 @@ short apj_theme_reset(void);		/* opcode 112: back to the stock look */
 short apj_theme_active(void);		/* 1 while a theme is loaded */
 short apj_theme_commit(void);		/* opcode 113: apply to the object theme */
 
+/*
+ * Opcode 114: draw antialiased text on the client's behalf. The desktop
+ * draws its own UI (taskbar, panels, directory listings) with v_gtext on
+ * its own workstation, which the renderer never sees; this lets it use
+ * the same atlas + blend. addrin[0] points at one of these in the
+ * client's memory. Coordinates are screen pixels, y is the cell top
+ * (vst_alignment 0,5). Returns 1 drawn, 0 = draw it yourself.
+ * The layout is the contract with btheme.c - keep them identical.
+ */
+struct apj_textreq
+{
+	short x, y;			/* cell top-left */
+	short pen;			/* text colour index (theme pens are shared) */
+	short cw, ch;			/* the font's cell, from vqt_attributes */
+	short clip[4];		/* x1 y1 x2 y2, inclusive */
+	const char *s;
+};
+
+short apj_text_request(struct xa_client *client, struct apj_textreq *rq);
+
 #endif /* _render_apj_h_ */

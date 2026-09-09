@@ -4833,16 +4833,28 @@ apj_fg_pixel(struct xa_vdi_settings *v, short pen, short x, short y)
  * Draw t with its top-left cell corner at (x, y) in pen fg. Returns 0
  * (nothing drawn) when the caller should use v_gtext instead.
  */
+static int apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, short ch, const char *t);
+
 static int
 apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 {
+	short cw, ch;
+
+	if (!apj_active || !t || !*t)
+		return 0;
+	(*v->api->t_extent)(v, "M", &cw, &ch);
+	return apj_gtext_cell(v, x, y, fg, cw, ch, t);
+}
+
+static int
+apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, short ch, const char *t)
+{
 	const struct apj_atlas *at;
 	const unsigned char *s;
-	short cw, ch, w, h, fdw, n, i, yy, xx;
+	short w, h, fdw, n, i, yy, xx;
 	short pxy[8];
 	long size;
 	MFDB msrc, mscr;
-
 	static short logged = 0;
 
 	if (!apj_active || !t || !*t)
@@ -4859,7 +4871,6 @@ apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 		if (*s < 32 || *s > 126)
 			return 0;
 
-	(*v->api->t_extent)(v, "M", &cw, &ch);
 	if (!(at = apj_atlas_for(cw, ch)))
 	{
 		if (!logged++)
@@ -4945,6 +4956,38 @@ apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 	vro_cpyfm(v->handle, S_ONLY, pxy, &msrc, &mscr);
 
 	return 1;
+}
+
+/*
+ * Opcode 114. Draws on the AES workstation under the caller's clip, with
+ * the mouse hidden as any AES draw is. The caller holds the update lock
+ * (it is inside its own redraw), so nothing else is painting.
+ */
+short
+apj_text_request(struct xa_client *client, struct apj_textreq *rq)
+{
+	struct xa_vdi_settings *v = api->C->Aes->vdi_settings;
+	GRECT clip, saved;
+	short ret;
+
+	if (!client || !rq || !rq->s || !apj_active || !v)
+		return 0;
+	if (rq->cw <= 0 || rq->ch <= 0 || rq->clip[2] < rq->clip[0] || rq->clip[3] < rq->clip[1])
+		return 0;
+
+	clip.g_x = rq->clip[0];
+	clip.g_y = rq->clip[1];
+	clip.g_w = rq->clip[2] - rq->clip[0] + 1;
+	clip.g_h = rq->clip[3] - rq->clip[1] + 1;
+
+	(*v->api->save_clip)(v, &saved);
+	(*v->api->set_clip)(v, &clip);
+	hidem();
+	ret = apj_gtext_cell(v, rq->x, rq->y, rq->pen, rq->cw, rq->ch, rq->s) ? 1 : 0;
+	showm();
+	(*v->api->restore_clip)(v, &saved);
+
+	return ret;
 }
 
 /*
