@@ -5509,6 +5509,34 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 			(*v->api->wr_mode)(v, MD_TRANS);
 			(*v->api->t_color)(v, col);
 		}
+		else if (apj_active && !MONO)
+		{
+			/* APJ-OS: no opaque label box. Unselected labels sit
+			 * transparently on whatever is behind them in the theme's
+			 * text colour; a selected icon gets a flat selection pill
+			 * behind its label with the selection text colour - the
+			 * Windows desktop convention, and the ib_char colours (which
+			 * assume a white box) are ignored. */
+			if (state & OS_SELECTED)
+			{
+				GRECT lb;
+				short tw, th;
+
+				(*v->api->t_extent)(v, iconblk->ib_ptext, &tw, &th);
+				lb.g_x = tx - 3;
+				lb.g_y = oby + iconblk->ib_ytext;
+				lb.g_w = tw + 6;
+				lb.g_h = iconblk->ib_htext;
+				apj_flat_box(v, &lb, APJ_PEN(APJ_R_SELBG), APJ_PEN(APJ_R_SELBG));
+				(*v->api->t_color)(v, APJ_PEN(APJ_R_SELFG));
+			}
+			else
+				(*v->api->t_color)(v, APJ_PEN(APJ_R_TEXT));
+
+			(*v->api->wr_mode)(v, MD_TRANS);
+			if (state & OS_DISABLED)
+				(*v->api->t_effects)(v, FAINT);
+		}
 		else
 		{
 			short text_fg, text_bg;
