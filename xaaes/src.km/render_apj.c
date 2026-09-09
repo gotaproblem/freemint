@@ -4265,7 +4265,10 @@ d_g_box(struct widget_tree *wt, struct xa_vdi_settings *v)
 		{
 			ct = selected ? &obt->norm.s[fl3d] : &obt->norm.n[fl3d];
 		}
-		draw_g_box(wt, v, ct, &c, bkg_flags, NULL);
+		/* APJ-OS: a menu bar / drop-down / popup surface is the theme's,
+		 * not the resource's colour word - the stock look got the same
+		 * effect from its gradient, which the flat theme has removed */
+		draw_g_box(wt, v, ct, (apj_active && wt->is_menu && !MONO) ? NULL : &c, bkg_flags, NULL);
 	}
 	done(OS_DISABLED|OS_SELECTED);
 }
