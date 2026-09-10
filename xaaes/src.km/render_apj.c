@@ -5160,7 +5160,12 @@ struct apj_icon
 	unsigned char *rgba;		/* w*h*4, straight alpha, R G B A byte order */
 };
 
-static struct apj_icon *apj_icons = NULL;
+/* A fixed table, no dynamic (re)allocation. The old kmalloc + realloc +
+ * copy over three bin files lost entries on the m68k heap (a hash that
+ * iconchk proved was in the bin came up 'NOT in table' at runtime).
+ * 44 icons per size x 3 sizes = 132; 256 is ample headroom. */
+#define APJ_MAX_ICONS 256
+static struct apj_icon apj_icons[APJ_MAX_ICONS];
 static short apj_nicons = 0;
 static char *apj_icon_blocks[3];		/* one data block per size file loaded */
 static short apj_icon_nblocks = 0;
@@ -5277,22 +5282,8 @@ apj_icons_load(void)
 		(*api->kfree)(d);
 		continue;
 	}
-	{
-		struct apj_icon *tab = (*api->kmalloc)((long) (apj_nicons + count) * sizeof(struct apj_icon));
-
-		if (!tab)
-		{
-			(*api->kfree)(d);
-			continue;
-		}
-		if (apj_icons)
-		{
-			for (i = 0; i < apj_nicons; i++)
-				tab[i] = apj_icons[i];
-			(*api->kfree)(apj_icons);
-		}
-		apj_icons = tab;
-	}
+	if (apj_nicons + count > APJ_MAX_ICONS)
+		count = APJ_MAX_ICONS - apj_nicons;	/* never overrun the fixed table */
 	for (i = 0; i < count; i++)
 	{
 		const unsigned char *e = d + 12 + i * 12;
@@ -5304,7 +5295,8 @@ apj_icons_load(void)
 		ic->h = (e[6] << 8) | e[7];
 		ic->rgba = (off + (long) ic->w * ic->h * 4 <= size) ? d + off : NULL;
 	}
-	apj_icon_blocks[apj_icon_nblocks++] = (char *) d;
+	if (apj_icon_nblocks < 3)
+		apj_icon_blocks[apj_icon_nblocks++] = (char *) d;
 	apj_nicons += count;
 	BLOG((0, "apj icons: %d loaded from %s (%d total)", count, fn, apj_nicons));
 	}
@@ -5317,7 +5309,7 @@ apj_icon_find(ICONBLK *ib)
 	unsigned long h;
 	int i;
 
-	if (!apj_icons || !ib->ib_pmask || !ib->ib_pdata)
+	if (!apj_nicons || !ib->ib_pmask || !ib->ib_pdata)
 		return NULL;
 	h = apj_icon_hash((unsigned char *) ib->ib_pmask, (unsigned char *) ib->ib_pdata, n);
 	for (i = 0; i < apj_nicons; i++)
