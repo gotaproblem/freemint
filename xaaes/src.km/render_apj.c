@@ -5335,29 +5335,41 @@ apj_icon_find(ICONBLK *ib)
 				h, i < apj_nicons ? i : -1, apj_icons[0].hash, apj_nicons > 1 ? apj_icons[1].hash : 0L));
 		}
 	}
-	/* A miss is also written to u:\ram\apjicon.log (first 40), readable
-	 * from the desktop with TosWin2 - there is no boot log on the Pi. */
+	/* A miss is written to u:\ram\apjicon.log (first 60), readable from the
+	 * desktop with TosWin2. Crucially: scan the table again ignoring rgba,
+	 * so we learn whether the hash was PRESENT (an rgba/size problem) or
+	 * ABSENT (a load/hash problem), and print the matching entry's stored
+	 * w/h/rgba so we can see exactly what the loader put there. */
 	if (i >= apj_nicons)
 	{
 		static short misses = 0;
 
-		if (misses < 40)
+		if (misses < 60)
 		{
 			struct file *fp;
 			long err;
-			char line[160];
+			char line[200];
+			int j, hit = -1;
 
 			misses++;
+			for (j = 0; j < apj_nicons; j++)
+				if (apj_icons[j].hash == h)
+				{
+					hit = j;
+					break;
+				}
 			fp = kernel_open("u:\\ram\\apjicon.log", O_WRONLY | O_CREAT | O_APPEND, &err, NULL);
 			if (fp)
 			{
 				const char *nm = ib->ib_ptext ? ib->ib_ptext : "";
-				short *m = (short *) ib->ib_pmask, *d = (short *) ib->ib_pdata;
 
-				sprintf(line, sizeof(line), "miss %dx%d '%s' hash %08lx n=%ld m[0..3]=%04x %04x %04x %04x d[0..3]=%04x %04x %04x %04x (table %d)\r\n",
-					ib->ib_wicon, ib->ib_hicon, nm, h, n,
-					m[0] & 0xffff, m[1] & 0xffff, m[2] & 0xffff, m[3] & 0xffff,
-					d[0] & 0xffff, d[1] & 0xffff, d[2] & 0xffff, d[3] & 0xffff, apj_nicons);
+				if (hit >= 0)
+					sprintf(line, sizeof(line), "miss %dx%d '%s' hash %08lx: in table at %d but SKIPPED - stored w=%d h=%d rgba=%lx (table %d)\r\n",
+						ib->ib_wicon, ib->ib_hicon, nm, h, hit,
+						apj_icons[hit].w, apj_icons[hit].h, (unsigned long) apj_icons[hit].rgba, apj_nicons);
+				else
+					sprintf(line, sizeof(line), "miss %dx%d '%s' hash %08lx: NOT in table at all (table %d)\r\n",
+						ib->ib_wicon, ib->ib_hicon, nm, h, apj_nicons);
 				kernel_write(fp, line, strlen(line));
 				kernel_close(fp);
 			}
@@ -6883,19 +6895,13 @@ exit_module(void)
 		apj_tbuf = NULL;
 		apj_tbuf_size = 0;
 	}
-	if (apj_icons)
-	{
-		(*api->kfree)(apj_icons);
-		apj_icons = NULL;
-	}
-	while (apj_icon_nblocks > 0)
-	{
-		apj_icon_nblocks--;
-		(*api->kfree)(apj_icon_blocks[apj_icon_nblocks]);
-		apj_icon_blocks[apj_icon_nblocks] = NULL;
-	}
-	apj_nicons = 0;
-	apj_icons_tried = 0;
+	/* APJ-OS: the icon table is loaded ONCE and kept for the life of
+	 * XaAES. It is NOT tied to this module's init/exit lifecycle - the
+	 * module is torn down and re-inited many times (theme commits, client
+	 * swaps), and freeing + reloading the table on every cycle raced with
+	 * in-flight icon draws and dropped entries (RAMDISK etc. went missing
+	 * from a fully-loaded 132-entry table). Leaving it allocated costs a
+	 * few hundred KB until reboot and makes lookups deterministic. */
 	(*api->free_xa_data_list)(&allocs);
 	(*api->free_xa_data_list)(&pmaps);
 	current_render_api = NULL;
