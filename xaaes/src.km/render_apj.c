@@ -2186,6 +2186,37 @@ static const struct xa_screen *screen = NULL;
 
 #if SELECT_COLOR
 static const short selected_colour[]   = {1, 0,13,15,14,10,12,11, 8, 9, 5, 7, 6, 2, 4, 3};
+
+/*
+ * APJ-OS: resource colour words name the standard 16 pens. Under a theme
+ * the four greys - the ones every dialog's boxes, sliders and frames are
+ * built from - are read as roles, so a themed client's dialogs follow the
+ * theme without touching the resource; real colours pass through. Filled
+ * in from the pens when a theme is loaded (apj_rsc_table()).
+ */
+static short apj_rsc_colour[16];
+static short apj_rsc_sel[16];
+static short apj_rsc_ready = 0;
+
+static const short *
+apj_rsc_table(int selected)
+{
+	if (!apj_rsc_ready)
+	{
+		int i;
+
+		for (i = 0; i < 16; i++)
+			apj_rsc_colour[i] = i;
+		apj_rsc_colour[G_WHITE]  = APJ_PEN(APJ_R_PAPER);
+		apj_rsc_colour[G_BLACK]  = APJ_PEN(APJ_R_TEXT);
+		apj_rsc_colour[G_LWHITE] = APJ_PEN(APJ_R_PANEL);
+		apj_rsc_colour[G_LBLACK] = APJ_PEN(APJ_R_DISABLED);
+		for (i = 0; i < 16; i++)
+			apj_rsc_sel[i] = apj_rsc_colour[selected3D_colour[i]];
+		apj_rsc_ready = 1;
+	}
+	return selected ? apj_rsc_sel : apj_rsc_colour;
+}
 #endif
 static const short selected3D_colour[] = {1, 0,13,15,14,10,12,11, 9, 8, 5, 7, 6, 2, 4, 3};
 static const short efx3d_colour[] =      {8, 9,10,11,12,13,14,15, 0, 1, 2, 3, 4, 5, 6, 7};
@@ -2635,6 +2666,14 @@ draw_objc_bkg(struct widget_tree *wt, struct xa_vdi_settings *v, struct color_th
 		sc = selected3D_colour;
 	else
 		sc = NULL;
+
+	/* APJ-OS: resource greys become theme roles (see apj_rsc_table) */
+	if (apj_active && !MONO)
+	{
+		sc = apj_rsc_table(sc != NULL);
+		if (box_col >= 0 && box_col < 16)
+			box_col = apj_rsc_colour[box_col];
+	}
 
 	if (!use_cw)
 	{
@@ -5068,7 +5107,7 @@ apj_flat_box(struct xa_vdi_settings *v, const GRECT *r, short fill, short border
 	short y1 = r->g_y;
 	short x2 = r->g_x + r->g_w - 1;
 	short y2 = r->g_y + r->g_h - 1;
-	short c = (r->g_w > 2 && r->g_h > 2) ? 1 : 0;
+	short c = (r->g_w > 7 && r->g_h > 7) ? 2 : (r->g_w > 2 && r->g_h > 2) ? 1 : 0;
 
 	(*v->api->wr_mode)(v, MD_REPLACE);
 	(*v->api->f_interior)(v, FIS_SOLID);
@@ -5079,6 +5118,15 @@ apj_flat_box(struct xa_vdi_settings *v, const GRECT *r, short fill, short border
 	(*v->api->line)(v, x1 + c, y2, x2 - c, y2, border);
 	(*v->api->line)(v, x1, y1 + c, x1, y2 - c, border);
 	(*v->api->line)(v, x2, y1 + c, x2, y2 - c, border);
+
+	if (c == 2)
+	{
+		/* a 4px-radius look: one diagonal pixel in each corner */
+		(*v->api->line)(v, x1 + 1, y1 + 1, x1 + 1, y1 + 1, border);
+		(*v->api->line)(v, x2 - 1, y1 + 1, x2 - 1, y1 + 1, border);
+		(*v->api->line)(v, x1 + 1, y2 - 1, x1 + 1, y2 - 1, border);
+		(*v->api->line)(v, x2 - 1, y2 - 1, x2 - 1, y2 - 1, border);
+	}
 }
 
 /*
