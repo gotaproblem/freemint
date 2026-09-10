@@ -5335,6 +5335,34 @@ apj_icon_find(ICONBLK *ib)
 				h, i < apj_nicons ? i : -1, apj_icons[0].hash, apj_nicons > 1 ? apj_icons[1].hash : 0L));
 		}
 	}
+	/* A miss is also written to u:\ram\apjicon.log (first 40), readable
+	 * from the desktop with TosWin2 - there is no boot log on the Pi. */
+	if (i >= apj_nicons)
+	{
+		static short misses = 0;
+
+		if (misses < 40)
+		{
+			struct file *fp;
+			long err;
+			char line[160];
+
+			misses++;
+			fp = kernel_open("u:\\ram\\apjicon.log", O_WRONLY | O_CREAT | O_APPEND, &err, NULL);
+			if (fp)
+			{
+				const char *nm = ib->ib_ptext ? ib->ib_ptext : "";
+				short *m = (short *) ib->ib_pmask, *d = (short *) ib->ib_pdata;
+
+				sprintf(line, sizeof(line), "miss %dx%d '%s' hash %08lx n=%ld m[0..3]=%04x %04x %04x %04x d[0..3]=%04x %04x %04x %04x (table %d)\r\n",
+					ib->ib_wicon, ib->ib_hicon, nm, h, n,
+					m[0] & 0xffff, m[1] & 0xffff, m[2] & 0xffff, m[3] & 0xffff,
+					d[0] & 0xffff, d[1] & 0xffff, d[2] & 0xffff, d[3] & 0xffff, apj_nicons);
+				kernel_write(fp, line, strlen(line));
+				kernel_close(fp);
+			}
+		}
+	}
 	return i < apj_nicons ? &apj_icons[i] : NULL;
 }
 
