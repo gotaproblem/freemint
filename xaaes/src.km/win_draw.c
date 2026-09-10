@@ -4286,7 +4286,7 @@ apj_flat_txt(struct xa_wtxt_inf *t, short fg)
 	struct xa_fnt_info *f[3];
 	int i;
 
-	t->flags &= ~(WTXT_DRAW3D|WTXT_ACT3D);
+	t->flags &= ~(WTXT_DRAW3D|WTXT_ACT3D|WTXT_CENTER);	/* Fluent titles sit left */
 	f[0] = &t->normal; f[1] = &t->selected; f[2] = &t->highlighted;
 	for (i = 0; i < 3; i++)
 	{
