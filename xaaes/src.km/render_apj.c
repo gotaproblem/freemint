@@ -5094,6 +5094,271 @@ apj_text_request(struct xa_client *client, struct apj_textreq *rq)
 }
 
 /*
+ * ---------------------------------------------------------------------
+ * Icon replacements
+ *
+ * apjicons-<size>.bin (built by apj-os-tools/icons/mkicons.py) holds a
+ * 32-bit RGBA image per icon, keyed by an FNV-1a hash of the icon's mono
+ * mask + data as stored in the resource - the one part of a CICONBLK
+ * that survives TeraDesk copying icon blocks per desktop item. Loaded
+ * from the AES home directory on first use while a theme is active.
+ * Drawn through the same read-back / blend / blit path the text uses,
+ * so alpha edges land correctly on any background; a selected icon gets
+ * a translucent accent tint, a disabled one half alpha.
+ *
+ * File: "APJI", u16 version, u16 count, u16 size, u16 0; then count x
+ * { u32 hash, u16 w, u16 h, u32 offset }, then RGBA data.
+ * ---------------------------------------------------------------------
+ */
+
+struct apj_icon
+{
+	unsigned long hash;
+	short w, h;
+	unsigned char *rgba;		/* w*h*4, straight alpha, R G B A byte order */
+};
+
+static struct apj_icon *apj_icons = NULL;
+static short apj_nicons = 0;
+static char *apj_icon_data = NULL;
+static short apj_icons_tried = 0;
+static short apj_chan[4] = { -1, -1, -1, -1 };	/* screen byte index of R, G, B; [3] = the spare */
+
+static unsigned long
+apj_icon_hash(const unsigned char *mask, const unsigned char *data, long n)
+{
+	unsigned long h = 0x811C9DC5UL;
+	long i;
+
+	for (i = 0; i < n; i++)
+		h = ((h ^ mask[i]) * 0x01000193UL) & 0xFFFFFFFFUL;
+	for (i = 0; i < n; i++)
+		h = ((h ^ data[i]) * 0x01000193UL) & 0xFFFFFFFFUL;
+	return h;
+}
+
+/*
+ * Which byte of a screen pixel carries which channel: set a scratch pen
+ * to pure red, green, blue in turn and probe (apj_fg_pixel already knows
+ * how to read a pen's pixel bytes back).
+ */
+static int
+apj_icon_channels(struct xa_vdi_settings *v, short x, short y)
+{
+	static const short pure[3][3] = { {1000, 0, 0}, {0, 1000, 0}, {0, 0, 1000} };
+	short scratch = APJ_PEN_BASE - 1;
+	int c, i, used = 0;
+
+	if (apj_chan[0] >= 0)
+		return 1;
+	for (c = 0; c < 3; c++)
+	{
+		vs_color(v->handle, scratch, (short *) pure[c]);
+		apj_fgpen_cached = -1;
+		if (!apj_fg_pixel(v, scratch, x, y))
+			return 0;
+		apj_chan[c] = -1;
+		for (i = 0; i < 4; i++)
+			if (apj_fgpx[i] >= 0xF0 && !(used & (1 << i)))
+			{
+				apj_chan[c] = i;
+				used |= 1 << i;
+				break;
+			}
+		if (apj_chan[c] < 0)
+			return 0;
+	}
+	for (i = 0; i < 4; i++)
+		if (!(used & (1 << i)))
+			apj_chan[3] = i;
+	apj_fgpen_cached = -1;
+	return 1;
+}
+
+static void
+apj_icons_load(void)
+{
+	char fn[200];
+	struct file *fp;
+	long err, size, got;
+	unsigned char *d;
+	unsigned short count, ver;
+	int i;
+
+	if (apj_icons_tried)
+		return;
+	apj_icons_tried = 1;
+
+	sprintf(fn, sizeof(fn), "%sapjicons-32.bin", api->C->Aes->home_path);
+	fp = kernel_open(fn, O_RDONLY, &err, NULL);
+	if (!fp)
+	{
+		BLOG((0, "apj icons: %s not found", fn));
+		return;
+	}
+	/* size: seek to the end */
+	size = kernel_lseek(fp, 0, SEEK_END);
+	kernel_lseek(fp, 0, SEEK_SET);
+	if (size < 12 || size > 4000000L || !(d = (*api->kmalloc)(size)))
+	{
+		kernel_close(fp);
+		return;
+	}
+	for (got = 0; got < size; )
+	{
+		err = kernel_read(fp, d + got, size - got);
+		if (err <= 0)
+			break;
+		got += err;
+	}
+	kernel_close(fp);
+	if (got != size || d[0] != 'A' || d[1] != 'P' || d[2] != 'J' || d[3] != 'I')
+	{
+		(*api->kfree)(d);
+		BLOG((0, "apj icons: bad file"));
+		return;
+	}
+	ver = (d[4] << 8) | d[5];
+	count = (d[6] << 8) | d[7];
+	if (ver != 1 || count == 0 || 12 + (long) count * 12 > size)
+	{
+		(*api->kfree)(d);
+		return;
+	}
+	apj_icons = (*api->kmalloc)((long) count * sizeof(struct apj_icon));
+	if (!apj_icons)
+	{
+		(*api->kfree)(d);
+		return;
+	}
+	for (i = 0; i < count; i++)
+	{
+		const unsigned char *e = d + 12 + i * 12;
+		unsigned long off = ((unsigned long) e[8] << 24) | ((unsigned long) e[9] << 16) | (e[10] << 8) | e[11];
+
+		apj_icons[i].hash = ((unsigned long) e[0] << 24) | ((unsigned long) e[1] << 16) | (e[2] << 8) | e[3];
+		apj_icons[i].w = (e[4] << 8) | e[5];
+		apj_icons[i].h = (e[6] << 8) | e[7];
+		apj_icons[i].rgba = (off + (long) apj_icons[i].w * apj_icons[i].h * 4 <= size) ? d + off : NULL;
+	}
+	apj_icon_data = (char *) d;
+	apj_nicons = count;
+	BLOG((0, "apj icons: %d loaded from %s", count, fn));
+}
+
+static struct apj_icon *
+apj_icon_find(ICONBLK *ib)
+{
+	long n = (long) ((ib->ib_wicon + 15) >> 4) * 2 * ib->ib_hicon;
+	unsigned long h;
+	int i;
+
+	if (!apj_icons || !ib->ib_pmask || !ib->ib_pdata)
+		return NULL;
+	h = apj_icon_hash((unsigned char *) ib->ib_pmask, (unsigned char *) ib->ib_pdata, n);
+	for (i = 0; i < apj_nicons; i++)
+		if (apj_icons[i].hash == h && apj_icons[i].rgba)
+			return &apj_icons[i];
+	return NULL;
+}
+
+/*
+ * Blend an icon at (x, y). sel = translucent accent tint over the icon's
+ * own pixels, dis = half alpha. Returns 0 if it could not (caller draws
+ * the resource icon instead).
+ */
+static int
+apj_icon_draw(struct xa_vdi_settings *v, struct apj_icon *ic, short x, short y, short sel, short dis)
+{
+	short w = ic->w, h = ic->h, fdw, xx, yy;
+	long size;
+	short pxy[8];
+	MFDB msrc, mscr;
+	unsigned char selpx[4];
+	const unsigned char *s;
+
+	if (screen->planes != 32 || !apj_active)
+		return 0;
+	if (x < screen->r.g_x || y < screen->r.g_y ||
+	    x + w > screen->r.g_x + screen->r.g_w || y + h > screen->r.g_y + screen->r.g_h)
+		return 0;
+	if (!apj_icon_channels(v, x, y))
+		return 0;
+	if (sel)
+	{
+		if (!apj_fg_pixel(v, APJ_PEN(APJ_R_SELBG), x, y))
+			return 0;
+		selpx[0] = apj_fgpx[0]; selpx[1] = apj_fgpx[1]; selpx[2] = apj_fgpx[2]; selpx[3] = apj_fgpx[3];
+	}
+
+	fdw = (w + 15) & ~15;
+	size = (long) fdw * h * 4;
+	if (size > apj_tbuf_size)
+	{
+		if (apj_tbuf)
+			(*api->kfree)(apj_tbuf);
+		apj_tbuf = (*api->kmalloc)(size);
+		apj_tbuf_size = apj_tbuf ? size : 0;
+		if (!apj_tbuf)
+			return 0;
+	}
+	msrc.fd_addr = apj_tbuf;
+	msrc.fd_w = fdw;
+	msrc.fd_h = h;
+	msrc.fd_wdwidth = fdw >> 4;
+	msrc.fd_stand = 0;
+	msrc.fd_nplanes = 32;
+	msrc.fd_r1 = msrc.fd_r2 = msrc.fd_r3 = 0;
+	mscr.fd_addr = NULL;
+
+	pxy[0] = x; pxy[1] = y; pxy[2] = x + w - 1; pxy[3] = y + h - 1;
+	pxy[4] = 0; pxy[5] = 0; pxy[6] = w - 1;     pxy[7] = h - 1;
+	vro_cpyfm(v->handle, S_ONLY, pxy, &mscr, &msrc);
+
+	s = ic->rgba;
+	for (yy = 0; yy < h; yy++)
+	{
+		unsigned char *p = (unsigned char *) apj_tbuf + (long) yy * fdw * 4;
+
+		for (xx = 0; xx < w; xx++, p += 4, s += 4)
+		{
+			unsigned short a = s[3];
+			unsigned char src[4];
+
+			if (dis)
+				a >>= 1;
+			if (a == 0)
+				continue;
+			src[apj_chan[0]] = s[0];
+			src[apj_chan[1]] = s[1];
+			src[apj_chan[2]] = s[2];
+			src[apj_chan[3]] = p[apj_chan[3]];
+			if (sel)
+			{
+				/* 40% towards the selection colour, on the icon's pixels */
+				src[apj_chan[0]] += (unsigned char) (((short) selpx[apj_chan[0]] - src[apj_chan[0]]) * 102 >> 8);
+				src[apj_chan[1]] += (unsigned char) (((short) selpx[apj_chan[1]] - src[apj_chan[1]]) * 102 >> 8);
+				src[apj_chan[2]] += (unsigned char) (((short) selpx[apj_chan[2]] - src[apj_chan[2]]) * 102 >> 8);
+			}
+			if (a >= 255)
+			{
+				p[0] = src[0]; p[1] = src[1]; p[2] = src[2]; p[3] = src[3];
+				continue;
+			}
+			p[0] += (unsigned char) (((short) src[0] - p[0]) * a >> 8);
+			p[1] += (unsigned char) (((short) src[1] - p[1]) * a >> 8);
+			p[2] += (unsigned char) (((short) src[2] - p[2]) * a >> 8);
+			p[3] += (unsigned char) (((short) src[3] - p[3]) * a >> 8);
+		}
+	}
+
+	pxy[0] = 0; pxy[1] = 0; pxy[2] = w - 1;     pxy[3] = h - 1;
+	pxy[4] = x; pxy[5] = y; pxy[6] = x + w - 1; pxy[7] = y + h - 1;
+	vro_cpyfm(v->handle, S_ONLY, pxy, &msrc, &mscr);
+	return 1;
+}
+
+/*
  * A flat control: solid fill, 1px border. The border stops one pixel
  * short of each corner, which at this size reads as a rounded corner
  * without needing arcs - a real radius comes later with the RGB blit
@@ -5875,6 +6140,23 @@ d_g_cicon(struct widget_tree *wt, struct xa_vdi_settings *v)
 	ic.g_x += obx;
 	ic.g_y += oby;
 
+	/* APJ-OS: a replacement icon under a theme */
+	if (apj_active && !MONO)
+	{
+		struct apj_icon *ai;
+
+		apj_icons_load();
+		if ((ai = apj_icon_find(iconblk)) && ai->w == ic.g_w && ai->h == ic.g_h
+		    && apj_icon_draw(v, ai, ic.g_x, ic.g_y, (ob->ob_state & OS_SELECTED) ? 1 : 0, (ob->ob_state & OS_DISABLED) ? 1 : 0))
+		{
+			if (iconblk->ib_char || *iconblk->ib_ptext)
+				apj_icon_on_desktop = (wt->owner && wt->owner->desktop && wt->tree == wt->owner->desktop->tree) ? 1 : 0;
+			icon_characters(v, theme, iconblk, ob->ob_state & (OS_SELECTED|OS_DISABLED), obx, oby, ic.g_x, ic.g_y);
+			done(OS_SELECTED|OS_DISABLED);
+			return;
+		}
+	}
+
 	(*v->api->ritopxy)(pxy,     0, 0, ic.g_w, ic.g_h);
 	(*v->api->rtopxy) (pxy + 4, &ic);
 
@@ -6477,6 +6759,16 @@ exit_module(void)
 		(*api->kfree)(apj_tbuf);
 		apj_tbuf = NULL;
 		apj_tbuf_size = 0;
+	}
+	if (apj_icons)
+	{
+		(*api->kfree)(apj_icons);
+		apj_icons = NULL;
+	}
+	if (apj_icon_data)
+	{
+		(*api->kfree)(apj_icon_data);
+		apj_icon_data = NULL;
 	}
 	(*api->free_xa_data_list)(&allocs);
 	(*api->free_xa_data_list)(&pmaps);
