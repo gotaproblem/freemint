@@ -4428,8 +4428,9 @@ apj_chrome_layout(void *_theme, short on)
 		{
 			if (on)
 			{
+				/* no hider: Windows has no such gadget, and hiding an
+				 * app is still there on the keyboard / app menu */
 				want[n++] = &t->title;
-				want[n++] = &t->hider;
 				want[n++] = &t->iconifier;
 				want[n++] = &t->fuller;
 				want[n++] = &t->closer;

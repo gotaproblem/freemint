@@ -4129,6 +4129,13 @@ standard_widgets(struct xa_window *wind, XA_WIND_ATTR tp, bool keep_stuff)
 			rows++;
 		}
 	}
+	/* APJ-OS: a Fluent layout installs no arrow widgets, but the arrow
+	 * bits stay in active_widgets so a click on the scrollbar track still
+	 * pages (is_V_arrow / is_H_arrow test the bits, not the widgets) */
+	if (!(wind->widgets[XAW_UPLN].m.properties & WIP_INSTALLED))
+		utp |= tp & (UPARROW|DNARROW|UPARROW1);
+	if (!(wind->widgets[XAW_LFLN].m.properties & WIP_INSTALLED))
+		utp |= tp & (LFARROW|RTARROW|LFARROW1);
 	tp &= ~THEME_WIDGETS;
 	utp &= THEME_WIDGETS;
 	wind->active_widgets = (tp | utp);
