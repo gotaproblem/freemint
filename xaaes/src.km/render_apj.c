@@ -5059,6 +5059,48 @@ apj_gtext_cell(struct xa_vdi_settings *v, short x, short y, short fg, short cw, 
 }
 
 /*
+ * Window chrome text (title, info line) - the same placement rules as
+ * xa_wtxt_output() in xa_vdi.c, drawn through the atlas. Returns 0 when
+ * the caller should fall back to the stock output.
+ */
+int
+apj_wtxt_output(struct xa_vdi_settings *v, struct xa_wtxt_inf *wtxti, char *txt, short state, const GRECT *r, short xoff, short yoff)
+{
+	struct xa_fnt_info *wtxt = (state & OS_SELECTED) ? &wtxti->selected : &wtxti->normal;
+	short x, y, w, h, f = wtxti->flags;
+	char t[200];
+
+	if (!apj_active || !txt)
+		return 0;
+
+	(*v->api->wr_mode)(v, MD_TRANS);
+	(*v->api->t_font)(v, wtxt->font_point, wtxt->font_id);
+	(*v->api->t_effects)(v, 0);
+
+	if (f & WTXT_NOCLIP)
+	{
+		strncpy(t, txt, sizeof(t) - 1);
+		t[sizeof(t) - 1] = '\0';
+	}
+	else
+		(*v->api->prop_clipped_name)(v, txt, t, r->g_w - (xoff << 1), &w, &h, 1);
+
+	(*v->api->t_extent)(v, t, &w, &h);
+	y = yoff + r->g_y + ((r->g_h - h) >> 1);
+
+	if (f & WTXT_CENTER)
+	{
+		x = r->g_x + ((r->g_w - w) >> 1);
+		if (x < (r->g_x + xoff))
+			x = r->g_x + xoff;
+	}
+	else
+		x = xoff + r->g_x;
+
+	return apj_gtext(v, x, y, wtxt->fg, t);
+}
+
+/*
  * Opcode 114. Draws on the AES workstation under the caller's clip, with
  * the mouse hidden as any AES draw is. The caller holds the update lock
  * (it is inside its own redraw), so nothing else is painting.
@@ -5120,7 +5162,8 @@ struct apj_icon
 
 static struct apj_icon *apj_icons = NULL;
 static short apj_nicons = 0;
-static char *apj_icon_data = NULL;
+static char *apj_icon_blocks[3];		/* one data block per size file loaded */
+static short apj_icon_nblocks = 0;
 static short apj_icons_tried = 0;
 static short apj_chan[4] = { -1, -1, -1, -1 };	/* screen byte index of R, G, B; [3] = the spare */
 
@@ -5185,16 +5228,25 @@ apj_icons_load(void)
 	unsigned short count, ver;
 	int i;
 
+	static const short sizes[] = { 32, 48, 64 };
+	int sz;
+
 	if (apj_icons_tried)
 		return;
 	apj_icons_tried = 1;
 
-	sprintf(fn, sizeof(fn), "%sapjicons-32.bin", api->C->Aes->home_path);
+	/* every size present is loaded into one table: the hash is of the
+	 * resource's mono mask+data, and a 48px resource icon can only ever
+	 * match an entry made from the same 48px icon, so the right size
+	 * picks itself */
+	for (sz = 0; sz < 3; sz++)
+	{
+	sprintf(fn, sizeof(fn), "%sapjicons-%d.bin", api->C->Aes->home_path, sizes[sz]);
 	fp = kernel_open(fn, O_RDONLY, &err, NULL);
 	if (!fp)
 	{
 		BLOG((0, "apj icons: %s not found", fn));
-		return;
+		continue;
 	}
 	/* size: seek to the end */
 	size = kernel_lseek(fp, 0, SEEK_END);
@@ -5202,7 +5254,7 @@ apj_icons_load(void)
 	if (size < 12 || size > 4000000L || !(d = (*api->kmalloc)(size)))
 	{
 		kernel_close(fp);
-		return;
+		continue;
 	}
 	for (got = 0; got < size; )
 	{
@@ -5215,35 +5267,47 @@ apj_icons_load(void)
 	if (got != size || d[0] != 'A' || d[1] != 'P' || d[2] != 'J' || d[3] != 'I')
 	{
 		(*api->kfree)(d);
-		BLOG((0, "apj icons: bad file"));
-		return;
+		BLOG((0, "apj icons: bad file %s", fn));
+		continue;
 	}
 	ver = (d[4] << 8) | d[5];
 	count = (d[6] << 8) | d[7];
 	if (ver != 1 || count == 0 || 12 + (long) count * 12 > size)
 	{
 		(*api->kfree)(d);
-		return;
+		continue;
 	}
-	apj_icons = (*api->kmalloc)((long) count * sizeof(struct apj_icon));
-	if (!apj_icons)
 	{
-		(*api->kfree)(d);
-		return;
+		struct apj_icon *tab = (*api->kmalloc)((long) (apj_nicons + count) * sizeof(struct apj_icon));
+
+		if (!tab)
+		{
+			(*api->kfree)(d);
+			continue;
+		}
+		if (apj_icons)
+		{
+			for (i = 0; i < apj_nicons; i++)
+				tab[i] = apj_icons[i];
+			(*api->kfree)(apj_icons);
+		}
+		apj_icons = tab;
 	}
 	for (i = 0; i < count; i++)
 	{
 		const unsigned char *e = d + 12 + i * 12;
 		unsigned long off = ((unsigned long) e[8] << 24) | ((unsigned long) e[9] << 16) | (e[10] << 8) | e[11];
+		struct apj_icon *ic = &apj_icons[apj_nicons + i];
 
-		apj_icons[i].hash = ((unsigned long) e[0] << 24) | ((unsigned long) e[1] << 16) | (e[2] << 8) | e[3];
-		apj_icons[i].w = (e[4] << 8) | e[5];
-		apj_icons[i].h = (e[6] << 8) | e[7];
-		apj_icons[i].rgba = (off + (long) apj_icons[i].w * apj_icons[i].h * 4 <= size) ? d + off : NULL;
+		ic->hash = ((unsigned long) e[0] << 24) | ((unsigned long) e[1] << 16) | (e[2] << 8) | e[3];
+		ic->w = (e[4] << 8) | e[5];
+		ic->h = (e[6] << 8) | e[7];
+		ic->rgba = (off + (long) ic->w * ic->h * 4 <= size) ? d + off : NULL;
 	}
-	apj_icon_data = (char *) d;
-	apj_nicons = count;
-	BLOG((0, "apj icons: %d loaded from %s", count, fn));
+	apj_icon_blocks[apj_icon_nblocks++] = (char *) d;
+	apj_nicons += count;
+	BLOG((0, "apj icons: %d loaded from %s (%d total)", count, fn, apj_nicons));
+	}
 }
 
 static struct apj_icon *
@@ -6796,11 +6860,14 @@ exit_module(void)
 		(*api->kfree)(apj_icons);
 		apj_icons = NULL;
 	}
-	if (apj_icon_data)
+	while (apj_icon_nblocks > 0)
 	{
-		(*api->kfree)(apj_icon_data);
-		apj_icon_data = NULL;
+		apj_icon_nblocks--;
+		(*api->kfree)(apj_icon_blocks[apj_icon_nblocks]);
+		apj_icon_blocks[apj_icon_nblocks] = NULL;
 	}
+	apj_nicons = 0;
+	apj_icons_tried = 0;
 	(*api->free_xa_data_list)(&allocs);
 	(*api->free_xa_data_list)(&pmaps);
 	current_render_api = NULL;

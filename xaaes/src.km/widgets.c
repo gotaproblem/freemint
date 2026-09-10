@@ -3978,6 +3978,17 @@ standard_widgets(struct xa_window *wind, XA_WIND_ATTR tp, bool keep_stuff)
 		}
 	}
 	{
+		/* APJ-OS: a Fluent layout has no scrollbar arrows in its rows.
+		 * A widget that is in no row is never touched below, so one
+		 * installed by an earlier (stock) layout of this window would
+		 * stay active at a stale position - clear them first. */
+		static const short arrows[] = { XAW_UPLN, XAW_UPLN1, XAW_DNLN, XAW_LFLN, XAW_LFLN1, XAW_RTLN };
+		int i;
+
+		for (i = 0; i < 6; i++)
+			wind->widgets[arrows[i]].m.properties &= ~(WIP_INSTALLED|WIP_ACTIVE);
+	}
+	{
 		struct nwidget_row *rows = theme->layout;
 		XA_WIND_ATTR rtp, this_tp, *tp_deps;
 		struct xa_widget *widg;

@@ -40,5 +40,9 @@ void free_widg_grad(const struct xa_module_api *_api);
 
 void apj_chrome_colours(void *wcols, short on, short ontop, short win_class);
 
+/* Re-order a client's widget layout (struct widget_theme *) for Fluent:
+ * gadgets on the right, closer last, no scrollbar arrows. */
+void apj_chrome_layout(void *theme, short on);
+
 
 #endif /* _wind_draw_h */

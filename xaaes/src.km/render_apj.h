@@ -81,4 +81,9 @@ struct apj_textreq
 
 short apj_text_request(struct xa_client *client, struct apj_textreq *rq);
 
+/* Window title / info-line text through the atlas (win_draw.c). Same
+ * placement as xa_wtxt_output(); 0 = not drawn, use the stock path. */
+struct xa_wtxt_inf;
+int apj_wtxt_output(struct xa_vdi_settings *v, struct xa_wtxt_inf *wtxti, char *txt, short state, const GRECT *r, short xoff, short yoff);
+
 #endif /* _render_apj_h_ */

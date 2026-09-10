@@ -956,6 +956,13 @@ apj_chrome_apply(int lock, struct xa_client *client, short on)
 {
 	struct xa_window *w;
 
+	/* geometry: the client's widget layouts (its own copies) */
+	if (client->widget_theme)
+	{
+		apj_chrome_layout(client->widget_theme->client, on);
+		apj_chrome_layout(client->widget_theme->alert, on);
+	}
+
 	for (w = window_list; w && w != root_window; w = w->next)
 	{
 		if (w->owner != client)
@@ -964,7 +971,21 @@ apj_chrome_apply(int lock, struct xa_client *client, short on)
 		apj_chrome_colours(w->ontop_cols, on, 1, w->class);
 		apj_chrome_colours(w->untop_cols, on, 0, w->class);
 
-		if (!w->nolist && (w->window_status & XAWS_OPEN))
+		if (w->nolist)
+			continue;
+
+		/* re-lay-out with the new widget sizes/order, same outer rect,
+		 * the way the fullscreen toggle does; the app is told its work
+		 * area moved with a WM_SIZED of the unchanged rect */
+		if (!is_iconified(w) && !(w->window_status & XAWS_SHADED))
+		{
+			change_window_attribs(lock, client, w, w->active_widgets, false, false, 0, w->r, NULL);
+			if (!w->dial && w->send_message)
+				w->send_message(lock, w, NULL, AMQ_NORM, QMF_CHKDUP,
+					WM_SIZED, 0, 0, w->handle, w->r.g_x, w->r.g_y, w->r.g_w, w->r.g_h);
+		}
+
+		if ((w->window_status & XAWS_OPEN))
 			generate_redraws(lock, w, &w->r, RDRW_ALL);
 	}
 }

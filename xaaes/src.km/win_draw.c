@@ -545,6 +545,7 @@ delete_theme(void *_theme)
  * elements of xa_window structure.
  */
 #define WCF_TOP		0x00000001
+#define WCF_APJ		0x00000002	/* APJ-OS: Fluent geometry and glyphs for this set */
 
 struct window_colours
 {
@@ -580,6 +581,170 @@ struct window_colours
 	struct xa_wtxt_inf	title_txt;
 	struct xa_wtxt_inf	info_txt;
 };
+
+/*
+ * APJ-OS Fluent geometry (phase 1). A window whose colour set carries
+ * WCF_APJ (set by apj_chrome_colours) gets: a title bar of text height
+ * + 12, gadgets as wide rectangles in the bar (title_h + 10 wide) drawn
+ * as vector glyphs instead of the xaaeswdg.rsc bitmaps, scrollbars 12px
+ * thick with an inset thumb and no arrow buttons, and the info line at
+ * text height + 8. Everything else (rows, hit testing, sliders) is the
+ * stock machinery working on the new numbers.
+ */
+#define APJ_SB_W	12
+
+static void draw_widg_box(struct xa_vdi_settings *v, short d, struct xa_wcol_inf *wcoli, struct xa_wtexture *t, short state, GRECT *wr, GRECT *anch);
+
+static inline int
+apj_wc(struct xa_window *wind)
+{
+	struct window_colours *wc = wind ? wind->ontop_cols : NULL;
+	return (wc && (wc->flags & WCF_APJ)) ? 1 : 0;
+}
+
+/* height of the title font's cell for this window */
+static short
+apj_title_text_h(struct xa_window *wind)
+{
+	struct xa_wtxt_inf *wti = &((struct window_colours *)wind->ontop_cols)->title_txt;
+	struct xa_vdi_settings *v = wind->vdi_settings;
+	struct xa_vdi_api *vapi = v->api;
+	short w, h;
+
+	(*vapi->t_font)(v, wti->normal.font_point, wti->normal.font_id ? wti->normal.font_id : cfg.font_id);
+	(*vapi->t_effects)(v, 0);
+	(*vapi->t_extent)(v, "A", &w, &h);
+	return h;
+}
+
+static inline short
+apj_title_h(struct xa_window *wind)
+{
+	return apj_title_text_h(wind) + 12;
+}
+
+/* the title-bar gadgets: closer, fuller, iconifier, hider */
+static void
+apj_gadget_size(struct xa_window *wind, struct xa_widget *widg)
+{
+	short h = apj_title_h(wind);
+
+	widg->r.g_h = h;
+	widg->r.g_w = h + 10;
+}
+
+/* scrollbar tracks, thumbs and the sizer square */
+static void
+apj_sb_size(struct xa_window *wind, struct xa_widget *widg)
+{
+	(void) wind;
+	widg->r.g_w = APJ_SB_W;
+	widg->r.g_h = APJ_SB_W;
+}
+
+/*
+ * A glyph in the title bar: 1px strokes, centred in the widget, sized
+ * from the bar height (10px at a 36px bar, 8px at 28).
+ */
+static void
+apj_glyph(struct xa_vdi_settings *v, struct xa_widget *widg, short col, short which)
+{
+	struct xa_vdi_api *vapi = v->api;
+	short g = widg->ar.g_h >= 32 ? 10 : 8;
+	short cx = widg->ar.g_x + (widg->ar.g_w >> 1);
+	short cy = widg->ar.g_y + (widg->ar.g_h >> 1);
+	short h = g >> 1;
+
+	(*vapi->wr_mode)(v, MD_REPLACE);
+	(*vapi->l_type)(v, 1);
+	(*vapi->l_width)(v, 1);
+	(*vapi->l_ends)(v, 0, 0);
+
+	switch (which)
+	{
+		case WIDG_CLOSER:
+		{
+			(*vapi->line)(v, cx - h, cy - h, cx + h, cy + h, col);
+			(*vapi->line)(v, cx - h, cy + h, cx + h, cy - h, col);
+			break;
+		}
+		case WIDG_FULL:
+		{
+			GRECT r;
+
+			r.g_x = cx - h;
+			r.g_y = cy - h;
+			r.g_w = g + 1;
+			r.g_h = g + 1;
+			(*vapi->l_color)(v, col);
+			(*vapi->gbox)(v, 0, &r);
+			break;
+		}
+		case WIDG_ICONIFY:
+		{
+			(*vapi->line)(v, cx - h, cy, cx + h, cy, col);
+			break;
+		}
+		case WIDG_HIDE:
+		{
+			/* a chevron pointing down: "put it away" */
+			short q = h >> 1;
+
+			(*vapi->line)(v, cx - h, cy - q, cx, cy + q, col);
+			(*vapi->line)(v, cx, cy + q, cx + h, cy - q, col);
+			break;
+		}
+		default:
+			break;
+	}
+}
+
+/*
+ * Fill a gadget with its (flat) colour set and put the glyph on it.
+ */
+static void
+apj_gadget(struct xa_window *wind, struct xa_widget *widg, struct xa_wcol_inf *wci, short which)
+{
+	struct window_colours *wc = wind->colours;
+	struct xa_vdi_settings *v = wind->vdi_settings;
+	short col = wc->title_txt.normal.fg;
+
+	widg->prevr = widg->ar;
+	draw_widg_box(v, 0, wci, NULL, widg->state, &widg->ar, &wind->r);
+	apj_glyph(v, widg, col, which);
+}
+
+/*
+ * A scrollbar thumb: inset 3px each side, corners dropped so it reads
+ * as a rounded pill at this size.
+ */
+static void
+apj_thumb(struct xa_vdi_settings *v, struct xa_wcol_inf *track, struct xa_wcol_inf *thumb, short state, GRECT *cl)
+{
+	struct xa_vdi_api *vapi = v->api;
+	struct xa_wcol *tc = (state & OS_SELECTED) ? &thumb->selected : &thumb->normal;
+	GRECT r = *cl;
+
+	if (r.g_w > 6 && r.g_h > 6)
+	{
+		r.g_x += 3; r.g_w -= 6;
+		r.g_y += 3; r.g_h -= 6;
+	}
+	(*vapi->wr_mode)(v, MD_REPLACE);
+	(*vapi->f_interior)(v, FIS_SOLID);
+	(*vapi->f_color)(v, tc->c);
+	(*vapi->gbar)(v, 0, &r);
+
+	/* corners back to the track colour */
+	(*vapi->f_color)(v, track->normal.c);
+	(*vapi->bar)(v, 0, r.g_x, r.g_y, 1, 1);
+	(*vapi->bar)(v, 0, r.g_x + r.g_w - 1, r.g_y, 1, 1);
+	(*vapi->bar)(v, 0, r.g_x, r.g_y + r.g_h - 1, 1, 1);
+	(*vapi->bar)(v, 0, r.g_x + r.g_w - 1, r.g_y + r.g_h - 1, 1, 1);
+}
+
+
+
 
 /* ---------------------------------------------------------------------------------- */
 /* -----------  Standard client window colour theme --------------------------------- */
@@ -1875,8 +2040,10 @@ draw_widg_box(struct xa_vdi_settings *v, short d, struct xa_wcol_inf *wcoli, str
 }
 
 static void
-draw_widget_text(struct xa_vdi_settings *v, struct xa_widget *widg, struct xa_wtxt_inf *wtxti, char *txt, short xoff, short yoff)
+draw_widget_text(struct xa_window *wind, struct xa_vdi_settings *v, struct xa_widget *widg, struct xa_wtxt_inf *wtxti, char *txt, short xoff, short yoff)
 {
+	if (apj_wc(wind) && apj_wtxt_output(v, wtxti, txt, widg->state, &widg->ar, xoff, yoff))
+		return;
 	(*v->api->wtxt_output)(v, wtxti, txt, widg->state, &widg->ar, xoff, yoff);
 }
 
@@ -2143,7 +2310,7 @@ d_title(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	else
 		strcpy(tn, widg->stuff.name);
 
-	draw_widget_text(v, widg, wti, tn, 4, 0);
+	draw_widget_text(wind, v, widg, wti, tn, apj_wc(wind) ? 12 : 4, 0);
 	return true;
 }
 
@@ -2155,6 +2322,11 @@ d_wcontext(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->closer, WIDG_CLOSER);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2188,6 +2360,11 @@ d_wappicn(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->closer, WIDG_CLOSER);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2221,6 +2398,11 @@ d_closer(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->closer, WIDG_CLOSER);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2254,6 +2436,11 @@ d_fuller(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->fuller, WIDG_FULL);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2324,7 +2511,7 @@ d_info(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 		else
 			return true;
 	}
-	draw_widget_text(wind->vdi_settings, widg, wti, widg->stuff.name, 4 + widg->xlimit, 0);
+	draw_widget_text(wind, wind->vdi_settings, widg, wti, widg->stuff.name, (apj_wc(wind) ? 12 : 4) + widg->xlimit, 0);
 	/* restore clip */
 	if (wti->flags & WTXT_NOCLIP)
 		(*v->api->set_clip)(wind->vdi_settings, &dr);
@@ -2339,6 +2526,11 @@ d_sizer(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->sizer, -1);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2372,6 +2564,11 @@ d_uparrow(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->uparrow, -1);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2404,6 +2601,11 @@ d_dnarrow(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->dnarrow, -1);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2436,6 +2638,11 @@ d_lfarrow(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->lfarrow, -1);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2468,6 +2675,11 @@ d_rtarrow(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->rtarrow, -1);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2570,6 +2782,11 @@ d_vslide(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	cl.g_w = sl->r.g_w;
 	cl.g_h = sl->r.g_h;
 
+	if (apj_wc(wind))
+	{
+		apj_thumb(wind->vdi_settings, &wc->vslide, &wc->vslider, widg->state, &cl);
+		return true;
+	}
 #if WITH_GRADIENTS
 	t = get_widg_gradient(wind->vdi_settings, widg, wc, &wc->vslider, 2, cl.g_w, cl.g_h);
 #endif
@@ -2626,6 +2843,11 @@ d_hslide(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	cl.g_w = sl->r.g_w;
 	cl.g_h = sl->r.g_h;
 
+	if (apj_wc(wind))
+	{
+		apj_thumb(wind->vdi_settings, &wc->hslide, &wc->hslider, widg->state, &cl);
+		return true;
+	}
 #if WITH_GRADIENTS
 	t = get_widg_gradient(wind->vdi_settings, widg, wc, &wc->hslider, 2, cl.g_w, cl.g_h);
 #endif
@@ -2641,6 +2863,11 @@ d_iconifier(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->iconifier, WIDG_ICONIFY);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2674,6 +2901,11 @@ d_hider(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 
 	(*api->rp2ap)(wind, widg, &widg->ar);
+	if (apj_wc(wind))
+	{
+		apj_gadget(wind, widg, &wc->hider, WIDG_HIDE);
+		return true;
+	}
 #if WITH_GRADIENTS
 	if (scrninf->planes > 8)
 	{
@@ -2726,6 +2958,12 @@ s_title_size(struct xa_window *wind, struct xa_widget *widg)
 	(*vapi->t_extent)(v, "A", &w, &h);
 	(*vapi->t_effects)(v, 0);
 
+	if (apj_wc(wind))
+	{
+		widg->r.g_h = h + 12;
+		return;
+	}
+
 	if ((wci->flags & (WCOL_DRAW3D|WCOL_BOXED)) || (wti->flags & WTXT_DRAW3D))
 		h += 4;
 	if ((wci->flags & WCOL_ACT3D) || (wti->flags & WTXT_ACT3D))
@@ -2758,7 +2996,7 @@ s_info_size(struct xa_window *wind, struct xa_widget *widg)
 	(*vapi->t_effects)(v, wti->normal.effects);
 	(*vapi->text_extent)(v, "X", &wti->normal, &w, &h);
 	(*vapi->t_effects)(v, 0);
- 	h += 2;
+ 	h += apj_wc(wind) ? 8 : 2;
 	widg->r.g_h = h;
 }
 
@@ -2798,56 +3036,111 @@ set_widg_size(struct xa_window *wind, struct xa_widget *widg, struct xa_wcol_inf
 static void _cdecl
 s_wcontext_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_gadget_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->closer, WIDG_CLOSER);
 }
 static void _cdecl
 s_wappicn_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_gadget_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->closer, WIDG_CLOSER);
 }
 static void _cdecl
 s_closer_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_gadget_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->closer, WIDG_CLOSER);
 }
 static void _cdecl
 s_hider_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_gadget_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->hider, WIDG_SIZE);
 }
 static void _cdecl
 s_iconifier_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_gadget_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->iconifier, WIDG_ICONIFY);
 }
 static void _cdecl
 s_fuller_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_gadget_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->fuller, WIDG_FULL);
 }
 static void _cdecl
 s_uparrow_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_sb_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->uparrow, WIDG_UP);
 }
 static void _cdecl
 s_dnarrow_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_sb_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->dnarrow, WIDG_DOWN);
 }
 static void _cdecl
 s_lfarrow_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_sb_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->lfarrow, WIDG_LEFT);
 }
 static void _cdecl
 s_rtarrow_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_sb_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->rtarrow, WIDG_RIGHT);
 }
 static void _cdecl
 s_sizer_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_sb_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->sizer, WIDG_SIZE);
 }
 /*
@@ -2856,11 +3149,21 @@ s_sizer_size(struct xa_window *wind, struct xa_widget *widg)
 static void _cdecl
 s_vslide_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_sb_size(wind, widg);
+		return;
+	}
 	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->uparrow, WIDG_UP);
 }
 static void _cdecl
 s_hslide_size(struct xa_window *wind, struct xa_widget *widg)
 {
+	if (apj_wc(wind))
+	{
+		apj_sb_size(wind, widg);
+		return;
+	}
  	set_widg_size(wind, widg, &((struct window_colours *)wind->ontop_cols)->rtarrow, WIDG_RIGHT);
 }
 
@@ -4043,6 +4346,7 @@ apj_chrome_colours(void *wcols, short on, short ontop, short win_class)
 		short thumb  = APJ_PEN(APJ_R_DISABLED);	/* Win11 scrollbar thumb: mid grey */
 		short titfg  = ontop ? APJ_PEN(APJ_R_TITFG) : APJ_PEN(APJ_R_DISABLED);
 
+		wc->flags |= WCF_APJ;
 		wc->waframe_col = border;
 		wc->frame_col   = border;
 
@@ -4073,6 +4377,105 @@ apj_chrome_colours(void *wcols, short on, short ontop, short win_class)
 
 		apj_flat_txt(&wc->title_txt, titfg);
 		apj_flat_txt(&wc->info_txt,  APJ_PEN(APJ_R_TEXT));
+	}
+}
+
+/*
+ * APJ-OS: re-order a client's widget layout for Fluent. The rows of a
+ * theme copy (duplicate_theme) have exactly as many slots as the stock
+ * rows, so they are rewritten in place: title row = title, hider,
+ * iconifier, fuller, closer (closer right-aligned, Windows order); the
+ * scrollbar columns lose their arrow buttons. off puts the stock order
+ * back. Windows already open must be re-laid-out by the caller
+ * (standard_widgets) for this to take effect.
+ */
+/*
+ * A theme copy's row array has one slot per widget bit in tp_mask
+ * (duplicate_theme), so writing back every wanted widget whose bit is in
+ * the mask can never overrun it, whichever order it was in before.
+ */
+static void
+apj_reorder_row(struct nwidget_row *row, struct render_widget **want, int nwant)
+{
+	struct render_widget **w = row->w;
+	int i, o = 0;
+
+	for (i = 0; i < nwant; i++)
+		if (want[i]->tp & row->tp_mask)
+			w[o++] = want[i];
+	w[o] = NULL;
+}
+
+void
+apj_chrome_layout(void *_theme, short on)
+{
+	struct widget_theme *t = _theme;
+	struct nwidget_row *row;
+
+	if (!t || !t->layout)
+		return;
+
+	t->closer.pos_in_row = on ? RT : LT;
+
+	for (row = t->layout; row->tp_mask != -1; row++)
+	{
+		struct render_widget *want[8];
+		int n = 0;
+
+		if (!row->w)
+			continue;
+		if (row->tp_mask & NAME)
+		{
+			if (on)
+			{
+				want[n++] = &t->title;
+				want[n++] = &t->hider;
+				want[n++] = &t->iconifier;
+				want[n++] = &t->fuller;
+				want[n++] = &t->closer;
+			}
+			else
+			{
+				want[n++] = &t->closer;
+				want[n++] = &t->title;
+				want[n++] = &t->hider;
+				want[n++] = &t->iconifier;
+				want[n++] = &t->fuller;
+			}
+		}
+		else if (row->tp_mask & VSLIDE)
+		{
+			if (on)
+			{
+				want[n++] = &t->vslide;
+				want[n++] = &t->sizer;
+			}
+			else
+			{
+				want[n++] = &t->uparrow1;
+				want[n++] = &t->vslide;
+				want[n++] = &t->dnarrow;
+				want[n++] = &t->uparrow;
+				want[n++] = &t->sizer;
+			}
+		}
+		else if (row->tp_mask & HSLIDE)
+		{
+			if (on)
+			{
+				want[n++] = &t->hslide;
+			}
+			else
+			{
+				want[n++] = &t->lfarrow1;
+				want[n++] = &t->hslide;
+				want[n++] = &t->lfarrow;
+				want[n++] = &t->rtarrow;
+			}
+		}
+		else
+			continue;
+		apj_reorder_row(row, want, n);
 	}
 }
 
