@@ -6243,6 +6243,70 @@ d_g_icon(struct widget_tree *wt, struct xa_vdi_settings *v)
 }
 
 /*
+ * A clean flat stand-in for an icon that has no replacement in the set.
+ * A rounded document tile: face fill, 1px border, a folded top-right
+ * corner. Uses theme pens and solid fills only - no colour-plane blit,
+ * so it never produces the stock 32-bit noise. Centred in the icon rect,
+ * capped so a big cell still gets a sensibly sized tile.
+ */
+static void
+apj_icon_placeholder(struct xa_vdi_settings *v, const GRECT *ic, short sel)
+{
+	struct xa_vdi_api *vapi = v->api;
+	short face   = APJ_PEN(sel ? APJ_R_SELBG : APJ_R_PAPER);
+	short border = APJ_PEN(APJ_R_BORDER);
+	short fold   = APJ_PEN(APJ_R_DISABLED);
+	short w = ic->g_w, h = ic->g_h, fw, tx, ty, cut, i;
+	GRECT r;
+
+	if (w <= 0 || h <= 0)
+		return;
+
+	/* a portrait document tile, ~70% of the cell, centred */
+	fw = (w * 7) / 10;
+	if (fw < 12) fw = w < 12 ? w : 12;
+	r.g_h = (h * 8) / 10;
+	if (r.g_h < 14) r.g_h = h < 14 ? h : 14;
+	r.g_w = fw;
+	r.g_x = ic->g_x + ((w - r.g_w) >> 1);
+	r.g_y = ic->g_y + ((h - r.g_h) >> 1);
+
+	cut = r.g_w / 3;
+	if (cut > r.g_h / 3) cut = r.g_h / 3;
+	if (cut < 3) cut = 3;
+
+	(*vapi->wr_mode)(v, MD_REPLACE);
+
+	/* body */
+	(*vapi->f_interior)(v, FIS_SOLID);
+	(*vapi->f_color)(v, face);
+	(*vapi->gbar)(v, 0, &r);
+
+	/* border (leave the corners one pixel short for a soft-corner look) */
+	(*vapi->l_color)(v, border);
+	(*vapi->line)(v, r.g_x + 1, r.g_y, r.g_x + r.g_w - cut - 1, r.g_y, border);          /* top, up to the fold */
+	(*vapi->line)(v, r.g_x + 1, r.g_y + r.g_h - 1, r.g_x + r.g_w - 2, r.g_y + r.g_h - 1, border); /* bottom */
+	(*vapi->line)(v, r.g_x, r.g_y + 1, r.g_x, r.g_y + r.g_h - 2, border);                /* left */
+	(*vapi->line)(v, r.g_x + r.g_w - 1, r.g_y + cut + 1, r.g_x + r.g_w - 1, r.g_y + r.g_h - 2, border); /* right, below the fold */
+
+	/* folded top-right corner */
+	tx = r.g_x + r.g_w - cut;
+	ty = r.g_y;
+	(*vapi->line)(v, tx, ty, r.g_x + r.g_w - 1, ty + cut, border);   /* diagonal */
+	(*vapi->line)(v, tx, ty, tx, ty + cut, border);                 /* fold left edge */
+	(*vapi->line)(v, tx, ty + cut, r.g_x + r.g_w - 1, ty + cut, border); /* fold bottom */
+
+	/* a couple of faint "text" lines so it reads as a document */
+	for (i = 1; i <= 2; i++)
+	{
+		short ly = r.g_y + cut + 4 + i * 5;
+
+		if (ly < r.g_y + r.g_h - 4)
+			(*vapi->line)(v, r.g_x + 4, ly, r.g_x + r.g_w - 5, ly, fold);
+	}
+}
+
+/*
  * Draw a colour icon
  */
 static void _cdecl
@@ -6290,6 +6354,18 @@ d_g_cicon(struct widget_tree *wt, struct xa_vdi_settings *v)
 			done(OS_SELECTED|OS_DISABLED);
 			return;
 		}
+
+		/* No replacement for this icon. The stock CICON path paints the
+		 * colour planes wrong on this 32-bit framebuffer (the noisy blob),
+		 * so draw a clean flat placeholder instead - a rounded panel tile
+		 * with a folded corner - and keep the label. Deliberate, not
+		 * broken, until the icon is added to the set. */
+		apj_icon_placeholder(v, &ic, ob->ob_state & OS_SELECTED);
+		if (iconblk->ib_char || *iconblk->ib_ptext)
+			apj_icon_on_desktop = (wt->owner && wt->owner->desktop && wt->tree == wt->owner->desktop->tree) ? 1 : 0;
+		icon_characters(v, theme, iconblk, ob->ob_state & (OS_SELECTED|OS_DISABLED), obx, oby, ic.g_x, ic.g_y);
+		done(OS_SELECTED|OS_DISABLED);
+		return;
 	}
 
 	(*v->api->ritopxy)(pxy,     0, 0, ic.g_w, ic.g_h);
