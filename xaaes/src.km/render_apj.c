@@ -2187,6 +2187,9 @@ static const struct xa_screen *screen = NULL;
 #if SELECT_COLOR
 static const short selected_colour[]   = {1, 0,13,15,14,10,12,11, 8, 9, 5, 7, 6, 2, 4, 3};
 
+#endif
+static const short selected3D_colour[] = {1, 0,13,15,14,10,12,11, 9, 8, 5, 7, 6, 2, 4, 3};
+
 /*
  * APJ-OS: resource colour words name the standard 16 pens. Under a theme
  * the four greys - the ones every dialog's boxes, sliders and frames are
@@ -2217,8 +2220,6 @@ apj_rsc_table(int selected)
 	}
 	return selected ? apj_rsc_sel : apj_rsc_colour;
 }
-#endif
-static const short selected3D_colour[] = {1, 0,13,15,14,10,12,11, 9, 8, 5, 7, 6, 2, 4, 3};
 static const short efx3d_colour[] =      {8, 9,10,11,12,13,14,15, 0, 1, 2, 3, 4, 5, 6, 7};
 
 /* ************************************************************ */
