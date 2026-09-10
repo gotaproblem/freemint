@@ -5835,7 +5835,12 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 	(*v->api->ritopxy)(pnt, obx + iconblk->ib_xtext, oby + iconblk->ib_ytext,
 		     iconblk->ib_wtext, iconblk->ib_htext);
 
-	(*v->api->t_font)(v, screen->small_font_point, screen->small_font_id);
+	/* APJ-OS: a label box tall enough for it (48px icon sets) gets the
+	 * standard font, antialiased; the classic 8px box keeps the small font */
+	if (apj_active && !MONO && iconblk->ib_htext >= screen->c_max_h)
+		(*v->api->t_font)(v, screen->standard_font_point, screen->standard_font_id);
+	else
+		(*v->api->t_font)(v, screen->small_font_point, screen->small_font_id);
 
 	/* center the text in a bar given by iconblk->tx, relative to object */
 	(*v->api->t_color)(v, G_BLACK);
@@ -5844,8 +5849,16 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 	    && iconblk->ib_wtext
 	    && iconblk->ib_htext)
 	{
-		tx = obx + iconblk->ib_xtext + ((iconblk->ib_wtext - strlen(iconblk->ib_ptext)*6) / 2);
-		ty = oby + iconblk->ib_ytext + ((iconblk->ib_htext - 6) / 2);
+		short tw, th;
+
+		(*v->api->t_extent)(v, iconblk->ib_ptext, &tw, &th);
+		if (!(apj_active && !MONO))
+		{
+			tw = strlen(iconblk->ib_ptext) * 6;		/* the stock small-font maths */
+			th = 6;
+		}
+		tx = obx + iconblk->ib_xtext + ((iconblk->ib_wtext - tw) / 2);
+		ty = oby + iconblk->ib_ytext + ((iconblk->ib_htext - th) / 2);
 
 		if (state & OS_STATE08)
 		{
@@ -5868,9 +5881,7 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 			if (state & OS_SELECTED)
 			{
 				GRECT lb;
-				short tw, th;
 
-				(*v->api->t_extent)(v, iconblk->ib_ptext, &tw, &th);
 				lb.g_x = tx - 3;
 				lb.g_y = oby + iconblk->ib_ytext;
 				lb.g_w = tw + 6;
@@ -5884,7 +5895,8 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 				 * one-pixel dark shadow, as the Windows desktop does */
 				(*v->api->wr_mode)(v, MD_TRANS);
 				(*v->api->t_color)(v, G_BLACK);
-				v_gtext(v->handle, tx + 1, ty + 1, iconblk->ib_ptext);
+				if (!apj_gtext(v, tx + 1, ty + 1, G_BLACK, iconblk->ib_ptext))
+					v_gtext(v->handle, tx + 1, ty + 1, iconblk->ib_ptext);
 				(*v->api->t_color)(v, G_WHITE);
 			}
 			else
@@ -5927,7 +5939,14 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 			if (state & OS_DISABLED)
 				(*v->api->t_effects)(v, FAINT);
 		}
-		v_gtext(v->handle, tx, ty, iconblk->ib_ptext);
+		{
+			short lfg = -1;
+
+			if (apj_active && !MONO && !(state & OS_STATE08))
+				lfg = (state & OS_SELECTED) ? APJ_PEN(APJ_R_SELFG) : apj_icon_on_desktop ? G_WHITE : APJ_PEN(APJ_R_TEXT);
+			if (lfg < 0 || !apj_gtext(v, tx, ty, lfg, iconblk->ib_ptext))
+				v_gtext(v->handle, tx, ty, iconblk->ib_ptext);
+		}
 	}
 
 	if (lc != 0 && lc != ' ')
