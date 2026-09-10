@@ -5258,8 +5258,20 @@ apj_icon_find(ICONBLK *ib)
 	h = apj_icon_hash((unsigned char *) ib->ib_pmask, (unsigned char *) ib->ib_pdata, n);
 	for (i = 0; i < apj_nicons; i++)
 		if (apj_icons[i].hash == h && apj_icons[i].rgba)
-			return &apj_icons[i];
-	return NULL;
+			break;
+	{
+		static short logged = 0;
+
+		if (logged < 12)
+		{
+			logged++;
+			BLOG((0, "apj icon: %dx%d n=%ld mask=%lx data=%lx m0=%04x d0=%04x hash=%08lx -> %d (tab0=%08lx tab1=%08lx)",
+				ib->ib_wicon, ib->ib_hicon, n, (unsigned long) ib->ib_pmask, (unsigned long) ib->ib_pdata,
+				ib->ib_pmask ? *(unsigned short *) ib->ib_pmask : 0, ib->ib_pdata ? *(unsigned short *) ib->ib_pdata : 0,
+				h, i < apj_nicons ? i : -1, apj_icons[0].hash, apj_nicons > 1 ? apj_icons[1].hash : 0L));
+		}
+	}
+	return i < apj_nicons ? &apj_icons[i] : NULL;
 }
 
 /*
