@@ -306,6 +306,9 @@ cancel_widget_active(struct xa_window *wind, int i)
 	widget_active.widg = NULL;
 	widget_active.cont = false;
 
+	/* APJ-OS: redraw the rounded corners a live drag put off */
+	apj_corners_flush(0, wind);
+
 	/* Restore the mouse now we've finished the action */
 	xa_graf_mouse(wind->owner->mouse, wind->owner->mouse_form, wind->owner, false);
 }

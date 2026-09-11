@@ -2648,6 +2648,31 @@ void toggle_menu(int lock, short md)
 }
 
 /*
+ * APJ-OS: rounded-corner redraws put off during a live drag (move_window)
+ */
+static struct xa_window *apj_corners_deferred = NULL;
+
+void
+apj_corners_flush(int lock, struct xa_window *wind)
+{
+	GRECT cb[4];
+	short i, ncb;
+	struct xa_window *nxt;
+
+	if (!wind || wind != apj_corners_deferred)
+		return;
+	apj_corners_deferred = NULL;
+
+	if (!(wind->window_status & XAWS_OPEN) || (wind->active_widgets & STORE_BACK))
+		return;
+
+	nxt = wind->nolist ? (wind->next ? wind->next : window_list) : wind->next;
+	ncb = apj_corner_boxes(wind, cb);
+	for (i = 0; i < ncb; i++)
+		update_windows_below(lock, &cb[i], NULL, nxt, NULL);
+}
+
+/*
  * Change an open window's coordinates, updating rectangle lists as appropriate
  */
 void _cdecl
@@ -2765,6 +2790,16 @@ move_window(int lock, struct xa_window *wind, bool blit, WINDOW_STATUS newstate,
 		 * the screen (the blit, or the window's own old pixels), and
 		 * nothing below was told - so ask for them explicitly. */
 		ncb = apj_corner_boxes(wind, cb);
+
+		/* During a live drag or resize of this window every mouse step
+		 * lands here; four extra rect-list rebuilds and redraw messages to
+		 * the programs below each time made the drag stutter. Defer: the
+		 * corners are put right once, when the drag ends. */
+		if (ncb && widget_active.widg && widget_active.cont && widget_active.wind == wind)
+		{
+			apj_corners_deferred = wind;
+			ncb = 0;
+		}
 		for (i = 0; i < ncb; i++)
 			update_windows_below(lock, &cb[i], NULL, nxt, NULL);
 	}

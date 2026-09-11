@@ -124,6 +124,7 @@ short	ws_gem_reset(void);
 void	apj_chrome_apply(int lock, struct xa_client *client, short on);
 void	apj_menu_relayout(int lock);
 void	apj_flush_wc_caches(void);
+void	apj_corners_flush(int lock, struct xa_window *wind);	/* corners deferred during a live drag */
 
 void	clear_wind_handles(void);
 //void	clear_wind_rectlist(struct xa_window *wind);
