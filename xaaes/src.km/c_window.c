@@ -980,8 +980,17 @@ apj_chrome_apply(int lock, struct xa_client *client, short on)
 		 * area moved with a WM_SIZED of the unchanged rect */
 		if (!is_iconified(w) && !(w->window_status & XAWS_SHADED))
 		{
+			GRECT owa = w->wa;
+
 			change_window_attribs(lock, client, w, w->active_widgets, false, false, 0, w->r, NULL);
-			if (!w->dial && w->send_message)
+
+			/* Tell the program only if its work area really moved. A
+			 * window with no chrome to re-lay-out (TeraDesk's taskbar and
+			 * tooltips) has no WM_SIZED handler - TeraDesk called a NULL
+			 * handler and crashed on every theme switch. */
+			if (!w->dial && w->send_message &&
+			    (owa.g_x != w->wa.g_x || owa.g_y != w->wa.g_y ||
+			     owa.g_w != w->wa.g_w || owa.g_h != w->wa.g_h))
 				w->send_message(lock, w, NULL, AMQ_NORM, QMF_CHKDUP,
 					WM_SIZED, 0, 0, w->handle, w->r.g_x, w->r.g_y, w->r.g_w, w->r.g_h);
 		}
