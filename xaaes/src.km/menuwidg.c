@@ -1453,7 +1453,7 @@ display_popup(Tab *tab, short rdx, short rdy)
 	struct xa_window *wind;
 	XA_WIND_ATTR tp = TOOLBAR;
 	GRECT r;
-	bool mod_h = false;
+	bool mod_h = false, fluent_drop;
 	int mg = MONO ? 0 : 0;
 	short rowh = screen.c_max_h;
 
@@ -1531,6 +1531,14 @@ display_popup(Tab *tab, short rdx, short rdy)
 	}
 
 	r = popup_inside(tab, r);
+
+	/* APJ-OS Fluent drop-down: the window is exactly the rounded panel -
+	 * the popup theme's canvas rim, work-area frame and shadow around it
+	 * squared off the corners. r becomes the panel (the stock work area) */
+	fluent_drop = (wt->apj_menu && !MONO && !mod_h);
+	if (fluent_drop)
+		r = calc_window(tab->lock, tab->client, WC_WORK, tp, created_for_AES|created_for_POPUP, mg, true, &r);
+
 	obtree->ob_x = k->pdx;
 	obtree->ob_y = k->pdy;
 
@@ -1548,6 +1556,17 @@ display_popup(Tab *tab, short rdx, short rdy)
 	if (wind)
 	{
 		GRECT or;
+
+		if (fluent_drop)
+		{
+			/* no popup canvas (the 3D black/white/grey rim of the popup
+			 * widget theme), border offsets, work-area frame or shadow */
+			wind->draw_canvas = NULL;
+			wind->bd = wind->rbd = (GRECT){0, 0, 0, 0};
+			wind->wa_frame = false;
+			wind->x_shadow = wind->y_shadow = 0;
+			calc_work_area(wind);
+		}
 		obj_rectangle(wt, aesobj(wt->tree, pi->parent), &or);
 		k->drop = wind->wa;
 
