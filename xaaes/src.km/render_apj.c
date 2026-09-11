@@ -5350,58 +5350,6 @@ apj_icon_find(ICONBLK *ib)
 	for (i = 0; i < apj_nicons; i++)
 		if (apj_icons[i].hash == h && apj_icons[i].rgba)
 			break;
-	{
-		static short logged = 0;
-
-		if (logged < 12)
-		{
-			logged++;
-			BLOG((0, "apj icon: %dx%d n=%ld mask=%lx data=%lx m0=%04x d0=%04x hash=%08lx -> %d (tab0=%08lx tab1=%08lx)",
-				ib->ib_wicon, ib->ib_hicon, n, (unsigned long) ib->ib_pmask, (unsigned long) ib->ib_pdata,
-				ib->ib_pmask ? *(unsigned short *) ib->ib_pmask : 0, ib->ib_pdata ? *(unsigned short *) ib->ib_pdata : 0,
-				h, i < apj_nicons ? i : -1, apj_icons[0].hash, apj_nicons > 1 ? apj_icons[1].hash : 0L));
-		}
-	}
-	/* A miss is written to u:\ram\apjicon.log (first 60), readable from the
-	 * desktop with TosWin2. Crucially: scan the table again ignoring rgba,
-	 * so we learn whether the hash was PRESENT (an rgba/size problem) or
-	 * ABSENT (a load/hash problem), and print the matching entry's stored
-	 * w/h/rgba so we can see exactly what the loader put there. */
-	if (i >= apj_nicons)
-	{
-		static short misses = 0;
-
-		if (misses < 60)
-		{
-			struct file *fp;
-			long err;
-			char line[200];
-			int j, hit = -1;
-
-			misses++;
-			for (j = 0; j < apj_nicons; j++)
-				if (apj_icons[j].hash == h)
-				{
-					hit = j;
-					break;
-				}
-			fp = kernel_open("u:\\ram\\apjicon.log", O_WRONLY | O_CREAT | O_APPEND, &err, NULL);
-			if (fp)
-			{
-				const char *nm = ib->ib_ptext ? ib->ib_ptext : "";
-
-				if (hit >= 0)
-					sprintf(line, sizeof(line), "miss %dx%d '%s' hash %08lx: in table at %d but SKIPPED - stored w=%d h=%d rgba=%lx (table %d)\r\n",
-						ib->ib_wicon, ib->ib_hicon, nm, h, hit,
-						apj_icons[hit].w, apj_icons[hit].h, (unsigned long) apj_icons[hit].rgba, apj_nicons);
-				else
-					sprintf(line, sizeof(line), "miss %dx%d '%s' hash %08lx: NOT in table at all (table %d)\r\n",
-						ib->ib_wicon, ib->ib_hicon, nm, h, apj_nicons);
-				kernel_write(fp, line, strlen(line));
-				kernel_close(fp);
-			}
-		}
-	}
 	return i < apj_nicons ? &apj_icons[i] : NULL;
 }
 
