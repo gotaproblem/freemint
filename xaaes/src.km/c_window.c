@@ -2435,6 +2435,91 @@ static void print_rect_list( struct xa_window *wind )
 }
 #endif
 /*
+ * Resize the root menu bar to bh pixels and move the root window's work
+ * area to match. Factored out of set_standard_point() so the APJ-OS
+ * Fluent theme can change the bar height without a font change.
+ */
+static void set_menu_bar_height(short bh)
+{
+	struct xa_widget *xaw = get_menu_widg(), *xat = get_widget(root_window, XAW_TOOLBAR);
+	XA_TREE *wt = xat->stuff.wt;
+
+	C.Aes->std_menu->tree->ob_height = bh;
+	xaw->r.g_h = xaw->ar.g_h = xat->r.g_h = xat->ar.g_h = bh;
+
+	if( cfg.menu_bar == 2 || (cfg.menu_bar == 1 && !cfg.menu_layout && !cfg.menu_ontop) )
+	{
+		root_window->wa.g_h = screen.r.g_h - xaw->r.g_h;
+		root_window->wa.g_y = xaw->r.g_h;
+	}
+	else
+	{
+		root_window->wa.g_h = screen.r.g_h;
+		root_window->wa.g_y = 0;
+	}
+	if( menu_window && cfg.menu_bar != 2 && cfg.menu_ontop && cfg.menu_bar )
+	{
+		menu_window->r.g_w = xaw->r.g_w;
+		menu_window->r.g_h = xaw->r.g_h;
+		if( menu_window->window_status & XAWS_OPEN)
+		{
+			move_window( 0, menu_window, true, 0, menu_window->r.g_x, menu_window->r.g_y, menu_window->r.g_w, menu_window->r.g_h );
+			redraw_menu_area();
+		}
+	}
+
+	//GRECT rc = screen.r;
+	//update_windows_below(0, &rc, &rc, window_list, NULL);
+	root_window->rwa = root_window->wa;
+
+	if (get_desktop()->owner == C.Aes)
+	{
+		wt->tree->ob_height = root_window->wa.g_h;
+		wt->tree->ob_y = root_window->wa.g_y;
+	}
+}
+
+/*
+ * APJ-OS: the Fluent theme was committed (113) or dropped (112). The root
+ * menu bar changes height and every installed root menu is re-laid-out
+ * (fix_menu puts the stock geometry back first, then applies the Fluent
+ * one if the theme is live), then the whole screen is redrawn.
+ *
+ * A desktop tree owned by an application is not moved: it keeps the
+ * area it was given, the bar just covers a few more of its top pixels.
+ */
+void apj_menu_relayout(int lock)
+{
+	struct xa_client *cl;
+	short bh = apj_menu_bar_height(screen.c_max_h);
+	GRECT r = screen.r;
+
+	if( cfg.menu_layout || !C.Aes->std_menu )
+		return;
+
+	popout(TAB_LIST_START);
+
+	if( get_menu_widg()->r.g_h != bh )
+		set_menu_bar_height(bh);
+
+	FOREACH_CLIENT(cl)
+	{
+		if( cl->std_menu )
+			fix_menu(cl->std_menu, root_window);
+		if( cl->nxt_menu && cl->nxt_menu != cl->std_menu )
+			fix_menu(cl->nxt_menu, root_window);
+	}
+	/* fix_menu set the AES menu tree to the bar minus its line; that
+	 * tree's height is what get_menu_height() reports, so put it back */
+	C.Aes->std_menu->tree->ob_height = bh;
+	if( get_menu() && get_menu()->owner )
+		set_rootmenu_area(get_menu()->owner);
+
+	update_windows_below(lock, &r, NULL, window_list, NULL);
+	redraw_menu(lock);
+}
+
+/*
  * set point-size for main-menu
  * adjust root-window-size
  * also used to switch menubar on/off
@@ -2444,8 +2529,7 @@ void set_standard_point(struct xa_client *client)
 	static int old_menu_bar = -1;
 	short w, h;
 	bool new_menu_sz = true;
-	struct xa_widget *xaw = get_menu_widg(), *xat = get_widget(root_window, XAW_TOOLBAR);
-	XA_TREE *wt = xat->stuff.wt;
+	struct xa_widget *xaw = get_menu_widg();
 	struct xa_vdi_settings *v = client->vdi_settings;
 
 	if( C.boot_focus && client->p != C.boot_focus)
@@ -2487,39 +2571,8 @@ void set_standard_point(struct xa_client *client)
 	screen.c_max_h = h;
 	if( new_menu_sz == true )
 	{
-		C.Aes->std_menu->tree->ob_height = h + 2;
-		xaw->r.g_h = xaw->ar.g_h = xat->r.g_h = xat->ar.g_h = h + 2;
-
-		if( cfg.menu_bar == 2 || (cfg.menu_bar == 1 && !cfg.menu_layout && !cfg.menu_ontop) )
-		{
-			root_window->wa.g_h = screen.r.g_h - xaw->r.g_h;
-			root_window->wa.g_y = xaw->r.g_h;
-		}
-		else
-		{
-			root_window->wa.g_h = screen.r.g_h;
-			root_window->wa.g_y = 0;
-		}
-		if( menu_window && cfg.menu_bar != 2 && cfg.menu_ontop && cfg.menu_bar )
-		{
-			menu_window->r.g_w = xaw->r.g_w;
-			menu_window->r.g_h = xaw->r.g_h;
-			if( menu_window->window_status & XAWS_OPEN)
-			{
-				move_window( 0, menu_window, true, 0, menu_window->r.g_x, menu_window->r.g_y, menu_window->r.g_w, menu_window->r.g_h );
-				redraw_menu_area();
-			}
-		}
-
-		//GRECT rc = screen.r;
-		//update_windows_below(0, &rc, &rc, window_list, NULL);
-		root_window->rwa = root_window->wa;
-
-		if (get_desktop()->owner == C.Aes)
-		{
-			wt->tree->ob_height = root_window->wa.g_h;
-			wt->tree->ob_y = root_window->wa.g_y;
-		}
+		/* APJ-OS: h + 2 stock, taller under the Fluent theme */
+		set_menu_bar_height(apj_menu_bar_height(h));
 	}
 }
 

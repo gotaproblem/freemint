@@ -744,6 +744,14 @@ free_wt(XA_TREE *wt)
 		return;
 	}
 
+	/* APJ-OS: saved stock menu geometry (menuwidg.c) */
+	if (wt->apj_mgeom)
+	{
+		kfree(wt->apj_mgeom);
+		wt->apj_mgeom = NULL;
+		wt->apj_menu = 0;
+	}
+
 	if (wt->extra && (wt->flags & WTF_XTRA_ALLOC))
 	{
 		DIAGS(("  --- freed extra %lx", (unsigned long)wt->extra));

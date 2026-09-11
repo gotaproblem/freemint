@@ -97,6 +97,8 @@
 
 static short _cdecl obj_thickness(struct widget_tree *wt, OBJECT *ob);
 static int apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t);	/* AA text, defined below */
+static void apj_flat_box(struct xa_vdi_settings *v, const GRECT *r, short fill, short border);	/* defined below */
+static void apj_menu_text(struct xa_vdi_settings *v, short x, short y, short pen, char *t);	/* defined below */
 
 /* APJ-OS theme state - used by drawers throughout, defined early */
 static struct rgb_1000 apj_rgb[APJ_R_N];
@@ -3635,8 +3637,9 @@ draw_g_box(struct widget_tree *wt, struct xa_vdi_settings *v, struct color_theme
 static void _cdecl
 write_menu_line(struct xa_vdi_settings *v, GRECT *cl)
 {
-	/* lower */
-	(*v->api->line)(v, cl->g_x, cl->g_y + cl->g_h - 1, cl->g_x + cl->g_w - 1, cl->g_y + cl->g_h - 1, G_BLACK);
+	/* lower - APJ-OS: a hairline in the theme border colour */
+	(*v->api->line)(v, cl->g_x, cl->g_y + cl->g_h - 1, cl->g_x + cl->g_w - 1, cl->g_y + cl->g_h - 1,
+		(apj_active && !MONO) ? APJ_PEN(APJ_R_BORDER) : G_BLACK);
 	if( api->cfg->menu_layout )
 	{
 		/* right */
@@ -4282,6 +4285,15 @@ d_g_box(struct widget_tree *wt, struct xa_vdi_settings *v)
 	}
 	else
 	{
+		/* APJ-OS Fluent menus (phase 2): the open drop-down is a flat
+		 * panel with a hairline border and softened corners */
+		if (apj_active && !MONO && wt->is_menu && wt->apj_menu && wt->pop == wt->current.item)
+		{
+			apj_flat_box(v, &wt->r, APJ_PEN(APJ_R_FACE), APJ_PEN(APJ_R_BORDER));
+			done(OS_DISABLED|OS_SELECTED|OS_SHADOWED|OS_OUTLINED);
+			return;
+		}
+
 		c = (*api->object_get_spec)(ob)->obspec;
 		fl3d = (ob->ob_flags & OF_FL3DMASK) >> 9;
 		selected = ob->ob_state & OS_SELECTED;
@@ -4904,6 +4916,22 @@ apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t)
 		return 0;
 	(*v->api->t_extent)(v, "M", &cw, &ch);
 	return apj_gtext_cell(v, x, y, fg, cw, ch, t);
+}
+
+/*
+ * Menu text for the Fluent menus: the atlas when it can, else plain
+ * v_gtext placed the way ob_text() places its fallback. y = cell top.
+ */
+static void
+apj_menu_text(struct xa_vdi_settings *v, short x, short y, short pen, char *t)
+{
+	if (!t || !*t)
+		return;
+	if (!apj_gtext(v, x, y, pen, t))
+	{
+		(*v->api->t_color)(v, pen);
+		v_gtext(v->handle, x, y - v->dists[5], t);
+	}
 }
 
 static int
@@ -6560,6 +6588,91 @@ d_g_string(struct widget_tree *wt, struct xa_vdi_settings *v)
 
 	t = (*api->object_get_spec)(ob)->free_string;
 
+	/* APJ-OS Fluent menus (phase 2): rows laid out by menuwidg.c */
+	if (t && apj_active && !MONO && wt->is_menu && wt->apj_menu)
+	{
+		short ch = screen->c_max_h, cw = screen->c_max_w;
+		short ty = r.g_y + (r.g_h - ch) / 2;
+		short pen = (state & OS_DISABLED) ? APJ_PEN(APJ_R_DISABLED) : APJ_PEN(APJ_R_TEXT);
+		char *p;
+		short sep = 0;
+
+		if (*t == '-' && (state & OS_DISABLED))
+		{
+			for (p = t; *p == '-'; p++)
+				;
+			sep = (*p == '\0');
+		}
+
+		(*v->api->wr_mode)(v, MD_REPLACE);
+		(*v->api->f_interior)(v, FIS_SOLID);
+		(*v->api->f_color)(v, APJ_PEN(APJ_R_FACE));
+		(*v->api->gbar)(v, 0, &r);
+
+		if (sep)
+		{
+			short y = r.g_y + r.g_h / 2;
+
+			(*v->api->line)(v, r.g_x + ch / 3, y, r.g_x + r.g_w - 1 - ch / 3, y, APJ_PEN(APJ_R_BORDER));
+			done(OS_SELECTED|OS_DISABLED|OS_CHECKED);
+			return;
+		}
+
+		if ((state & OS_SELECTED) && !(state & OS_DISABLED))
+			apj_flat_box(v, &r, APJ_PEN(APJ_R_DARK), APJ_PEN(APJ_R_DARK));
+
+		(*v->api->t_font)(v, screen->standard_font_point, screen->standard_font_id);
+		(*v->api->t_effects)(v, 0);
+		(*v->api->wr_mode)(v, MD_TRANS);
+
+		if (state & OS_CHECKED)
+			apj_menu_text(v, r.g_x + 2, ty, pen, "\10");
+
+		strncpy(text, t, 254);
+		text[254] = '\0';
+
+		/* a trailing short token after two or more spaces is the
+		 * keyboard shortcut ("  Open...     ^O "): same cell position,
+		 * secondary grey */
+		{
+			short len = strlen(text), end = len, k = -1;
+
+			while (end > 0 && text[end - 1] == ' ')
+				end--;
+			if (end > 0)
+			{
+				short b = end;
+
+				while (b > 0 && text[b - 1] != ' ')
+					b--;
+				if (b >= 3 && text[b - 1] == ' ' && text[b - 2] == ' '
+				    && end - b <= 6 && text[0] == ' ')
+				{
+					short q;
+
+					for (q = 0; q < b && text[q] == ' '; q++)
+						;
+					if (q < b - 2)
+						k = b;
+				}
+			}
+			if (k > 0)
+			{
+				char sc = text[k];
+
+				text[k] = '\0';
+				apj_menu_text(v, r.g_x, ty, pen, text);
+				text[k] = sc;
+				apj_menu_text(v, r.g_x + k * cw, ty,
+					(state & OS_DISABLED) ? pen : APJ_PEN(APJ_R_DISABLED), text + k);
+			}
+			else
+				apj_menu_text(v, r.g_x, ty, pen, text);
+		}
+		done(OS_SELECTED|OS_DISABLED|OS_CHECKED);
+		return;
+	}
+
 	/* most AES's allow null string */
 	if (t)
 	{
@@ -6721,6 +6834,41 @@ d_g_title(struct widget_tree *wt, struct xa_vdi_settings *v)
 	OBJECT *ob = wt->current.ob;
 	char *t = (*api->object_get_spec)(ob)->free_string;
 	bool selected;
+
+	/* APJ-OS Fluent menus (phase 2): the title object spans the bar
+	 * height (so the whole bar tracks); the open title is an inset pill */
+	if (t && apj_active && !MONO && wt->apj_menu)
+	{
+		GRECT r = wt->r, pill;
+		short ch = screen->c_max_h, th = ch + ch / 6;
+
+		(*v->api->wr_mode)(v, MD_REPLACE);
+		(*v->api->f_interior)(v, FIS_SOLID);
+		(*v->api->f_color)(v, APJ_PEN(APJ_R_PANEL));
+		(*v->api->gbar)(v, 0, &r);
+
+		pill = r;
+		if (pill.g_h > th)
+		{
+			pill.g_y += (pill.g_h - th) / 2;
+			pill.g_h = th;
+		}
+		if (pill.g_w > 4)
+		{
+			pill.g_x += 1;
+			pill.g_w -= 2;
+		}
+		if ((ob->ob_state & OS_SELECTED) && !(ob->ob_state & OS_DISABLED))
+			apj_flat_box(v, &pill, APJ_PEN(APJ_R_DARK), APJ_PEN(APJ_R_DARK));
+
+		(*v->api->t_font)(v, screen->standard_font_point, screen->standard_font_id);
+		(*v->api->t_effects)(v, 0);
+		(*v->api->wr_mode)(v, MD_TRANS);
+		apj_menu_text(v, r.g_x + ch / 6, r.g_y + (r.g_h - ch) / 2,
+			(ob->ob_state & OS_DISABLED) ? APJ_PEN(APJ_R_DISABLED) : APJ_PEN(APJ_R_TEXT), t);
+		done(OS_SELECTED|OS_DISABLED);
+		return;
+	}
 
 	if (t)
 	{

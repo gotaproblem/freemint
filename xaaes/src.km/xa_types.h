@@ -939,6 +939,14 @@ struct widget_tree
 					 * or anything the like ;-) */
 	void *extra;			/* Extra info if needed (texts for alert) */
 	struct xa_lbox_info *lbox;
+
+	/* APJ-OS Fluent menus (menuwidg.c). apj_menu = 1 while the tree has
+	 * the Fluent menu geometry, so render_apj draws pills, rows and
+	 * separators for it; apj_mgeom = the stock geometry it replaced
+	 * (kmalloc'd, restored and freed when the theme goes). Kept last so
+	 * nothing that indexes the struct above moves. */
+	short apj_menu;
+	void *apj_mgeom;
 };
 typedef struct widget_tree XA_TREE;
 
