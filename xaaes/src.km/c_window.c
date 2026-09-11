@@ -2488,6 +2488,21 @@ static void set_menu_bar_height(short bh)
  * A desktop tree owned by an application is not moved: it keeps the
  * area it was given, the bar just covers a few more of its top pixels.
  */
+void apj_flush_wc_caches(void)
+{
+	struct xa_client *cl;
+
+	/* APJ-OS: wind_calc answers from a per-client cache of frame deltas
+	 * made with a throwaway window. Those deltas depend on whether the
+	 * client gets Fluent chrome, so a theme commit (113) or drop (112)
+	 * invalidates every client's cache - a program started before the
+	 * commit (TosWin2) otherwise sized its text from stock deltas. */
+	FOREACH_CLIENT(cl)
+	{
+		delete_wc_cache(&cl->wcc);
+	}
+}
+
 void apj_menu_relayout(int lock)
 {
 	struct xa_client *cl;

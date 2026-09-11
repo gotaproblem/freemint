@@ -5906,9 +5906,30 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 {
 	char lc = iconblk->ib_char;
 	short tx,ty,pnt[4];
+	char *lt = iconblk->ib_ptext, lbuf[40];
+	short fluent = (apj_active && !MONO) ? 1 : 0;
 
-	if( !lc && !*iconblk->ib_ptext )
+	if( !lc && (!lt || !*lt) )
 		return;
+
+	/* APJ-OS: the icon character (a drive letter) goes into the label -
+	 * "HARD DISC C" - in the label's own antialiased text. Drawn over the
+	 * image, in the resource's colour and at small-font offsets, it was
+	 * black on the dark Papirus drives and only showed when selected. */
+	if (fluent && lc > ' ')
+	{
+		short k = 0;
+
+		if (lt)
+			for (; lt[k] && k < (short) sizeof(lbuf) - 3; k++)
+				lbuf[k] = lt[k];
+		if (k)
+			lbuf[k++] = ' ';
+		lbuf[k++] = lc;
+		lbuf[k] = '\0';
+		lt = lbuf;
+		lc = 0;
+	}
 
 	(*v->api->wr_mode)(v, MD_REPLACE);
 	(*v->api->ritopxy)(pnt, obx + iconblk->ib_xtext, oby + iconblk->ib_ytext,
@@ -5923,17 +5944,17 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 
 	/* center the text in a bar given by iconblk->tx, relative to object */
 	(*v->api->t_color)(v, G_BLACK);
-	if (   iconblk->ib_ptext
-	    && *iconblk->ib_ptext
+	if (   lt
+	    && *lt
 	    && iconblk->ib_wtext
 	    && iconblk->ib_htext)
 	{
 		short tw, th;
 
-		(*v->api->t_extent)(v, iconblk->ib_ptext, &tw, &th);
+		(*v->api->t_extent)(v, lt, &tw, &th);
 		if (!(apj_active && !MONO))
 		{
-			tw = strlen(iconblk->ib_ptext) * 6;		/* the stock small-font maths */
+			tw = strlen(lt) * 6;		/* the stock small-font maths */
 			th = 6;
 		}
 		tx = obx + iconblk->ib_xtext + ((iconblk->ib_wtext - tw) / 2);
@@ -5982,8 +6003,8 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 				 * one-pixel dark shadow, as the Windows desktop does */
 				(*v->api->wr_mode)(v, MD_TRANS);
 				(*v->api->t_color)(v, G_BLACK);
-				if (!apj_gtext(v, tx + 1, ty + 1, G_BLACK, iconblk->ib_ptext))
-					v_gtext(v->handle, tx + 1, ty + 1, iconblk->ib_ptext);
+				if (!apj_gtext(v, tx + 1, ty + 1, G_BLACK, lt))
+					v_gtext(v->handle, tx + 1, ty + 1, lt);
 				(*v->api->t_color)(v, G_WHITE);
 			}
 			else
@@ -6031,8 +6052,8 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 
 			if (apj_active && !MONO && !(state & OS_STATE08))
 				lfg = (state & OS_SELECTED) ? APJ_PEN(APJ_R_SELFG) : apj_icon_on_desktop ? G_WHITE : APJ_PEN(APJ_R_TEXT);
-			if (lfg < 0 || !apj_gtext(v, tx, ty, lfg, iconblk->ib_ptext))
-				v_gtext(v->handle, tx, ty, iconblk->ib_ptext);
+			if (lfg < 0 || !apj_gtext(v, tx, ty, lfg, lt))
+				v_gtext(v->handle, tx, ty, lt);
 		}
 	}
 

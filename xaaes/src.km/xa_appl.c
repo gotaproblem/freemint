@@ -1854,6 +1854,7 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			apj_chrome_apply(lock, C.Hlp, 0);
 			/* menu bar back to stock height and layout */
 			apj_menu_relayout(lock);
+			apj_flush_wc_caches();
 			break;
 		}
 		case 115:						/* APJ theme query: addrin[0] -> long[APJ_R_N] */
@@ -1880,6 +1881,7 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 					apj_chrome_apply(lock, C.Hlp, 1);
 				/* Fluent menu bar and drop-downs (phase 2) */
 				apj_menu_relayout(lock);
+				apj_flush_wc_caches();
 			}
 			else
 				ret = 0;
