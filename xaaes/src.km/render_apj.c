@@ -5160,10 +5160,17 @@ struct apj_icon
 	unsigned char *rgba;		/* w*h*4, straight alpha, R G B A byte order */
 };
 
-/* A fixed table, no dynamic (re)allocation. The old kmalloc + realloc +
- * copy over three bin files lost entries on the m68k heap (a hash that
- * iconchk proved was in the bin came up 'NOT in table' at runtime).
- * 44 icons per size x 3 sizes = 132; 256 is ample headroom. */
+/* A fixed table: 44 icons per size x 3 sizes = 132; 256 is headroom.
+ *
+ * Big-endian fields are assembled with every byte cast to unsigned long
+ * first. XaAES is built -mshort: a plain (b << 8) is a 16-bit signed int,
+ * so for b >= 0x80 it goes negative and sign-extends into the upper word
+ * when OR'd into a long - hash ADB7959B was stored as FFFF959B ('NOT in
+ * table') and offsets like 0x0001A2xx became 0xFFFFA2xx (rgba NULL).
+ * iconchk, built with 32-bit int, could never see it. */
+#define APJ_BE16(p)	((unsigned short) (((unsigned short) (p)[0] << 8) | (unsigned short) (p)[1]))
+#define APJ_BE32(p)	(((unsigned long) (p)[0] << 24) | ((unsigned long) (p)[1] << 16) | \
+			 ((unsigned long) (p)[2] << 8) | (unsigned long) (p)[3])
 #define APJ_MAX_ICONS 256
 static struct apj_icon apj_icons[APJ_MAX_ICONS];
 static short apj_nicons = 0;
@@ -5275,8 +5282,8 @@ apj_icons_load(void)
 		BLOG((0, "apj icons: bad file %s", fn));
 		continue;
 	}
-	ver = (d[4] << 8) | d[5];
-	count = (d[6] << 8) | d[7];
+	ver = APJ_BE16(d + 4);
+	count = APJ_BE16(d + 6);
 	if (ver != 1 || count == 0 || 12 + (long) count * 12 > size)
 	{
 		(*api->kfree)(d);
@@ -5287,13 +5294,13 @@ apj_icons_load(void)
 	for (i = 0; i < count; i++)
 	{
 		const unsigned char *e = d + 12 + i * 12;
-		unsigned long off = ((unsigned long) e[8] << 24) | ((unsigned long) e[9] << 16) | (e[10] << 8) | e[11];
+		unsigned long off = APJ_BE32(e + 8);
 		struct apj_icon *ic = &apj_icons[apj_nicons + i];
 
-		ic->hash = ((unsigned long) e[0] << 24) | ((unsigned long) e[1] << 16) | (e[2] << 8) | e[3];
-		ic->w = (e[4] << 8) | e[5];
-		ic->h = (e[6] << 8) | e[7];
-		ic->rgba = (off + (long) ic->w * ic->h * 4 <= size) ? d + off : NULL;
+		ic->hash = APJ_BE32(e);
+		ic->w = APJ_BE16(e + 4);
+		ic->h = APJ_BE16(e + 6);
+		ic->rgba = (off < (unsigned long) size && off + (unsigned long) ic->w * ic->h * 4 <= (unsigned long) size) ? d + off : NULL;
 	}
 	if (apj_icon_nblocks < 3)
 		apj_icon_blocks[apj_icon_nblocks++] = (char *) d;
