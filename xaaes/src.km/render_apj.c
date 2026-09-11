@@ -5258,6 +5258,29 @@ apj_icon_channels(struct xa_vdi_settings *v, short x, short y)
 	return 1;
 }
 
+/*
+ * Icon diagnostics (temporary): every step of the icon replacement is
+ * written to u:\\ram\\apjicon.log - the build stamp, what was loaded, and
+ * for each CICON drawn why it did or did not get its replacement. Read it
+ * with TosWin2 or copy it to the share. Remove once icons are confirmed.
+ */
+#define APJ_ICON_DIAG_MAX 120
+static short apj_icon_diag_n = 0;
+
+static void
+apj_icon_diag(const char *line)
+{
+	struct file *fp;
+	long err;
+
+	fp = kernel_open("u:\\ram\\apjicon.log", O_WRONLY | O_CREAT | O_APPEND, &err, NULL);
+	if (fp)
+	{
+		kernel_write(fp, line, strlen(line));
+		kernel_close(fp);
+	}
+}
+
 static void
 apj_icons_load(void)
 {
@@ -5274,6 +5297,8 @@ apj_icons_load(void)
 	if (apj_icons_tried)
 		return;
 	apj_icons_tried = 1;
+
+	apj_icon_diag("=== apj icons, build " __DATE__ " " __TIME__ " (BE32 loader) ===\r\n");
 
 	/* every size present is loaded into one table: the hash is of the
 	 * resource's mono mask+data, and a 48px resource icon can only ever
@@ -5332,6 +5357,22 @@ apj_icons_load(void)
 	}
 	if (apj_icon_nblocks < 3)
 		apj_icon_blocks[apj_icon_nblocks++] = (char *) d;
+	{
+		char line[160];
+
+		sprintf(line, sizeof(line), "load %s: size %ld count %d at table %d, data %lx\r\n",
+			fn, size, count, apj_nicons, (unsigned long) d);
+		apj_icon_diag(line);
+		for (i = 0; i < count; i++)
+		{
+			struct apj_icon *ic = &apj_icons[apj_nicons + i];
+
+			sprintf(line, sizeof(line), "  [%3d] %08lx %dx%d rgba %lx (+%ld)\r\n",
+				apj_nicons + i, ic->hash, ic->w, ic->h, (unsigned long) ic->rgba,
+				ic->rgba ? (long) (ic->rgba - d) : -1L);
+			apj_icon_diag(line);
+		}
+	}
 	apj_nicons += count;
 	BLOG((0, "apj icons: %d loaded from %s (%d total)", count, fn, apj_nicons));
 	}
@@ -5407,8 +5448,9 @@ apj_icon_find(ICONBLK *ib)
 
 /*
  * Blend an icon at (x, y). sel = translucent accent tint over the icon's
- * own pixels, dis = half alpha. Returns 0 if it could not (caller draws
- * the resource icon instead).
+ * own pixels, dis = half alpha. Returns 1 when drawn; <= 0 when it could
+ * not (-1 not 32-bit/no theme, -2 off screen, -3 channel probe, -4 sel
+ * pen, -5 no buffer) and the caller draws the placeholder.
  */
 static int
 apj_icon_draw(struct xa_vdi_settings *v, struct apj_icon *ic, short x, short y, short sel, short dis)
@@ -5421,16 +5463,16 @@ apj_icon_draw(struct xa_vdi_settings *v, struct apj_icon *ic, short x, short y, 
 	const unsigned char *s;
 
 	if (screen->planes != 32 || !apj_active)
-		return 0;
+		return -1;
 	if (x < screen->r.g_x || y < screen->r.g_y ||
 	    x + w > screen->r.g_x + screen->r.g_w || y + h > screen->r.g_y + screen->r.g_h)
-		return 0;
+		return -2;
 	if (!apj_icon_channels(v, x, y))
-		return 0;
+		return -3;
 	if (sel)
 	{
 		if (!apj_fg_pixel(v, APJ_PEN(APJ_R_SELBG), x, y))
-			return 0;
+			return -4;
 		selpx[0] = apj_fgpx[0]; selpx[1] = apj_fgpx[1]; selpx[2] = apj_fgpx[2]; selpx[3] = apj_fgpx[3];
 	}
 
@@ -5443,7 +5485,7 @@ apj_icon_draw(struct xa_vdi_settings *v, struct apj_icon *ic, short x, short y, 
 		apj_tbuf = (*api->kmalloc)(size);
 		apj_tbuf_size = apj_tbuf ? size : 0;
 		if (!apj_tbuf)
-			return 0;
+			return -5;
 	}
 	msrc.fd_addr = apj_tbuf;
 	msrc.fd_w = fdw;
@@ -6371,9 +6413,32 @@ d_g_cicon(struct widget_tree *wt, struct xa_vdi_settings *v)
 	{
 		struct apj_icon *ai;
 
+		short why = -9;		/* -9 not in table, -8 size differs, else draw's code */
+
 		apj_icons_load();
-		if ((ai = apj_icon_find(iconblk)) && ai->w == ic.g_w && ai->h == ic.g_h
-		    && apj_icon_draw(v, ai, ic.g_x, ic.g_y, (ob->ob_state & OS_SELECTED) ? 1 : 0, (ob->ob_state & OS_DISABLED) ? 1 : 0))
+		ai = apj_icon_find(iconblk);
+		if (!ai)
+			why = -9;
+		else if (ai->w != ic.g_w || ai->h != ic.g_h)
+			why = -8;
+		else
+			why = apj_icon_draw(v, ai, ic.g_x, ic.g_y, (ob->ob_state & OS_SELECTED) ? 1 : 0, (ob->ob_state & OS_DISABLED) ? 1 : 0);
+
+		if (apj_icon_diag_n < APJ_ICON_DIAG_MAX)
+		{
+			char line[200];
+			const char *nm = iconblk->ib_ptext ? iconblk->ib_ptext : "";
+
+			apj_icon_diag_n++;
+			sprintf(line, sizeof(line), "draw '%s' ib %dx%d at %d,%d obj %d -> %s idx %d ent %dx%d rgba %lx: %d\r\n",
+				nm, ic.g_w, ic.g_h, ic.g_x, ic.g_y, wt->current.item,
+				why > 0 ? "DRAWN" : why == -9 ? "NOT FOUND" : why == -8 ? "SIZE" : "DRAW FAILED",
+				ai ? (short) (ai - apj_icons) : -1, ai ? ai->w : 0, ai ? ai->h : 0,
+				ai ? (unsigned long) ai->rgba : 0UL, why);
+			apj_icon_diag(line);
+		}
+
+		if (why > 0)
 		{
 			if (iconblk->ib_char || *iconblk->ib_ptext)
 				apj_icon_on_desktop = (wt->owner && wt->owner->desktop && wt->tree == wt->owner->desktop->tree) ? 1 : 0;
