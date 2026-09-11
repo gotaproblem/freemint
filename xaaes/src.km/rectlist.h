@@ -44,6 +44,8 @@ bool is_inside(const GRECT *r, const GRECT *o);
 
 struct xa_window;
 short apj_corner_steps(struct xa_window *wind, const short **inset);	/* rows carved per corner, 0 = square */
+short apj_round_steps(short r, const short **inset);		/* inset table for radius r */
+short apj_round_radius(void);					/* Fluent radius at this screen size */
 short apj_corner_rows(struct xa_window *wind, const short **inset, short *nt, short *nb); /* carved rows top/bottom */
 short apj_shape_rects(struct xa_window *wind, GRECT *out);		/* rounded shape as rects; 0 = square */
 short apj_corner_boxes(struct xa_window *wind, GRECT *out);		/* 4 corner bounding boxes; 0 = square */

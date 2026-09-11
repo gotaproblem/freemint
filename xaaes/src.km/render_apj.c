@@ -48,6 +48,7 @@
 #include "xa_types.h"
 #include "render_obj.h"
 #include "render_apj.h"
+#include "rectlist.h"
 #include "apj_atlas.h"
 #include "global.h"
 #include "mint/stat.h"
@@ -98,6 +99,7 @@
 static short _cdecl obj_thickness(struct widget_tree *wt, OBJECT *ob);
 static int apj_gtext(struct xa_vdi_settings *v, short x, short y, short fg, const char *t);	/* AA text, defined below */
 static void apj_flat_box(struct xa_vdi_settings *v, const GRECT *r, short fill, short border);	/* defined below */
+static void apj_round_panel(struct xa_vdi_settings *v, const GRECT *r, short fill, short border);	/* defined below */
 static void apj_menu_text(struct xa_vdi_settings *v, short x, short y, short pen, char *t);	/* defined below */
 
 /* APJ-OS theme state - used by drawers throughout, defined early */
@@ -4286,10 +4288,10 @@ d_g_box(struct widget_tree *wt, struct xa_vdi_settings *v)
 	else
 	{
 		/* APJ-OS Fluent menus (phase 2): the open drop-down is a flat
-		 * panel with a hairline border and softened corners */
+		 * panel with a hairline border and rounded corners */
 		if (apj_active && !MONO && wt->is_menu && wt->apj_menu && wt->pop == wt->current.item)
 		{
-			apj_flat_box(v, &wt->r, APJ_PEN(APJ_R_FACE), APJ_PEN(APJ_R_BORDER));
+			apj_round_panel(v, &wt->r, APJ_PEN(APJ_R_FACE), APJ_PEN(APJ_R_BORDER));
 			done(OS_DISABLED|OS_SELECTED|OS_SHADOWED|OS_OUTLINED);
 			return;
 		}
@@ -5485,6 +5487,69 @@ apj_flat_box(struct xa_vdi_settings *v, const GRECT *r, short fill, short border
 		(*v->api->line)(v, x2 - 1, y2 - 1, x2 - 1, y2 - 1, border);
 	}
 }
+
+/*
+ * A Fluent panel with true rounded corners (the drop-down menus): filled
+ * row by row inside the quarter-circle steps, the border following the
+ * curve like a rounded window's outline. Pixels outside the curve are not
+ * touched - under a menu drop-down they are still whatever it opened over.
+ */
+static void
+apj_round_panel(struct xa_vdi_settings *v, const GRECT *r, short fill, short border)
+{
+	const short *in;
+	short n = apj_round_steps(apj_round_radius(), &in), k;
+	short x1 = r->g_x, y1 = r->g_y;
+	short x2 = r->g_x + r->g_w - 1, y2 = r->g_y + r->g_h - 1;
+	GRECT b;
+
+	if (n <= 0 || r->g_w < 2 * in[0] + 4 || r->g_h < 2 * n + 2)
+	{
+		apj_flat_box(v, r, fill, border);
+		return;
+	}
+
+	(*v->api->wr_mode)(v, MD_REPLACE);
+	(*v->api->f_interior)(v, FIS_SOLID);
+	(*v->api->f_color)(v, fill);
+
+	for (k = 0; k < n; k++)
+	{
+		b.g_x = x1 + in[k];
+		b.g_w = r->g_w - 2 * in[k];
+		b.g_h = 1;
+		b.g_y = y1 + k;
+		(*v->api->gbar)(v, 0, &b);
+		b.g_y = y2 - k;
+		(*v->api->gbar)(v, 0, &b);
+	}
+	b.g_x = x1;
+	b.g_w = r->g_w;
+	b.g_y = y1 + n;
+	b.g_h = r->g_h - 2 * n;
+	(*v->api->gbar)(v, 0, &b);
+
+	/* straight edges */
+	(*v->api->line)(v, x1 + in[0], y1, x2 - in[0], y1, border);
+	(*v->api->line)(v, x1 + in[0], y2, x2 - in[0], y2, border);
+	(*v->api->line)(v, x1, y1 + n, x1, y2 - n, border);
+	(*v->api->line)(v, x2, y1 + n, x2, y2 - n, border);
+
+	/* the curve: each step row from its inset to where the row above ends */
+	for (k = 0; k < n; k++)
+	{
+		short a = in[k];
+		short e = k ? in[k - 1] - 1 : in[k];
+
+		if (e < a)
+			e = a;
+		(*v->api->line)(v, x1 + a, y1 + k, x1 + e, y1 + k, border);
+		(*v->api->line)(v, x2 - e, y1 + k, x2 - a, y1 + k, border);
+		(*v->api->line)(v, x1 + a, y2 - k, x1 + e, y2 - k, border);
+		(*v->api->line)(v, x2 - e, y2 - k, x2 - a, y2 - k, border);
+	}
+}
+
 
 /*
  * Fluent checkbox: a square with a 1px border on paper; selected fills

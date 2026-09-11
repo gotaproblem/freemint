@@ -296,7 +296,7 @@ apj_corner_radius(struct xa_window *w)
 	    || (w->dial & created_for_POPUP) || !apj_window_fluent(w))
 		return 0;
 
-	r = screen.r.g_h >= 1000 ? 8 : screen.r.g_h >= 700 ? 6 : 4;
+	r = apj_round_radius();
 
 	if (w->r.g_w < 4 * r || w->r.g_h < 2 * r + 2)
 		return 0;
@@ -315,12 +315,13 @@ apj_corner_radius(struct xa_window *w)
  * outer edge: r - sqrt(r^2 - (r - k - 1/2)^2), in half-pixel integer
  * arithmetic. r = 8 gives 5 3 2 1 1.
  */
+/* Inset table for a quarter circle of radius r (shared, cached) */
 short
-apj_corner_steps(struct xa_window *wind, const short **inset)
+apj_round_steps(short r, const short **inset)
 {
-	short r = apj_corner_radius(wind), k;
+	short k;
 
-	if (!r)
+	if (r <= 0)
 		return 0;
 	if (r != apj_cr_radius)
 	{
@@ -341,6 +342,19 @@ apj_corner_steps(struct xa_window *wind, const short **inset)
 	if (inset)
 		*inset = apj_cr_inset;
 	return apj_cr_n;
+}
+
+/* The Fluent corner radius at this screen size */
+short
+apj_round_radius(void)
+{
+	return screen.r.g_h >= 1000 ? 8 : screen.r.g_h >= 700 ? 6 : 4;
+}
+
+short
+apj_corner_steps(struct xa_window *wind, const short **inset)
+{
+	return apj_round_steps(apj_corner_radius(wind), inset);
 }
 
 /*
