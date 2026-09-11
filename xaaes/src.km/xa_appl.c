@@ -674,6 +674,9 @@ exit_client(int lock, struct xa_client *client, int code, bool pexit, bool detac
 	 */
 	client->status |= CS_EXITING;
 
+	/* APJ-OS: the taskbar dock leaving - minimised windows back to the grid */
+	apj_dock_client_exit(lock, client);
+
 	if (client != C.Hlp) {
 		cancel_winctxt_popup(lock, NULL, client);
 
@@ -1855,6 +1858,26 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			/* menu bar back to stock height and layout */
 			apj_menu_relayout(lock);
 			apj_flush_wc_caches();
+			break;
+		}
+		case 116:						/* APJ dock: addrin[0] = 1 register / 0 leave */
+		{
+			ret = apj_dock_register(lock, client, (short) (long) pb->addrin[0]);
+			break;
+		}
+		case 117:						/* APJ dock: addrin[0] -> struct apj_dockent[] */
+		{
+			ret = apj_dock_list((struct apj_dockent *) pb->addrin[0]);
+			break;
+		}
+		case 118:						/* APJ dock: restore window, addrin[0] = handle */
+		{
+			ret = apj_dock_restore(lock, get_wind_by_handle(lock, (short) (long) pb->addrin[0]));
+			break;
+		}
+		case 119:						/* APJ dock: restore an app's windows, addrin[0] = apid */
+		{
+			ret = apj_dock_restore_app(lock, (short) (long) pb->addrin[0]);
 			break;
 		}
 		case 115:						/* APJ theme query: addrin[0] -> long[APJ_R_N] */

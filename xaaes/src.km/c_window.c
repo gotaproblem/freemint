@@ -700,7 +700,7 @@ show_toolboxwindows(struct xa_client *client)
 		 * (XAWS_WSHIDDEN) are belowroot too, but belong to another
 		 * desk - app-in-front must NOT resurrect them. */
 		if (wind->owner == client && (wind->window_status & XAWS_BELOWROOT)
-		    && !(wind->window_status & XAWS_WSHIDDEN))
+		    && !(wind->window_status & (XAWS_WSHIDDEN|XAWS_DOCKED)))
 		{
 			wi_move_first(&S.open_windows, wind);
 			wind->window_status &= ~XAWS_BELOWROOT;
@@ -1333,9 +1333,187 @@ remove_from_iredraw_queue(int lock, struct xa_window *wind)
 	}
 }
 
+/*
+ * APJ-OS taskbar dock. While a dock is registered (appl_control 116, the
+ * Fluent taskbar), a window being iconified is not given a spot in the
+ * icon grid: it is iconified off-screen and stacked below the root window
+ * - the kernel-side hiding the workspaces use - and appears as a taskbar
+ * tile (list: 117). A tile click (118/119) brings it above the root
+ * and asks its owner to uniconify it. Dock gone: back to the icon grid.
+ */
+static struct xa_client *apj_dock_client = NULL;
+
+static bool
+apj_dockable(struct xa_window *w)
+{
+	return apj_dock_client && !(apj_dock_client->status & CS_EXITING)
+	    && w != root_window && !w->nolist
+	    && (w->window_status & XAWS_OPEN)
+	    && !(w->owner->status & CS_EXITING)
+	    && w->owner != C.Aes && w->owner != C.Hlp;
+}
+
+static void
+apj_dock_window(int lock, struct xa_window *wind, GRECT *r)
+{
+	bool had_focus = (S.focus == wind);
+	GRECT ic = iconify_grid(0);
+
+	r->g_w = ic.g_w;
+	r->g_h = ic.g_h;
+	r->g_x = root_window->rc.g_x + root_window->rc.g_w + 16;
+	r->g_y = root_window->rc.g_y + root_window->rc.g_h + 16;
+
+	/* iconify where nothing shows; move_window repaints what it covered */
+	move_window(lock, wind, true, XAWS_ICONIFIED, r->g_x, r->g_y, r->g_w, r->g_h);
+	wind->window_status &= ~XAWS_CHGICONIF;
+	wind->window_status |= XAWS_DOCKED;
+
+	movewind_belowroot(wind);
+
+	if (had_focus)
+	{
+		struct xa_window *nf = window_list;
+
+		/* the next titled window - not a bar or panel without one */
+		while (nf && nf != root_window &&
+		       ((nf->window_status & (XAWS_ICONIFIED|XAWS_HIDDEN|XAWS_NOFOCUS)) ||
+		        !(nf->active_widgets & NAME)))
+			nf = nf->next;
+		if (nf == root_window)
+			nf = NULL;
+		setnew_focus(nf, wind, true, true, true);
+	}
+	set_winmouse(-1, -1);
+}
+
+/* Back into the icon grid - the dock went away */
+static void
+apj_dock_release_all(int lock)
+{
+	struct xa_window *w = root_window->next, *nxt;
+
+	while (w)
+	{
+		nxt = w->next;
+		if ((w->window_status & (XAWS_OPEN|XAWS_DOCKED)) == (XAWS_OPEN|XAWS_DOCKED)
+		    && !(w->owner->status & CS_EXITING))
+		{
+			GRECT r = free_icon_pos(lock, w);
+
+			w->window_status &= ~(XAWS_DOCKED|XAWS_BELOWROOT);
+			wi_move_first(&S.open_windows, w);
+			set_and_update_window(w, false, false, &r);
+			update_windows_below(lock, &w->r, NULL, w->next, NULL);
+		}
+		else
+			w->window_status &= ~XAWS_DOCKED;
+		w = nxt;
+	}
+	set_winmouse(-1, -1);
+}
+
+short
+apj_dock_register(int lock, struct xa_client *client, short on)
+{
+	if (on)
+		apj_dock_client = client;
+	else if (apj_dock_client == client)
+	{
+		apj_dock_client = NULL;
+		apj_dock_release_all(lock);
+	}
+	return 1;
+}
+
+void
+apj_dock_client_exit(int lock, struct xa_client *client)
+{
+	if (client == apj_dock_client)
+	{
+		apj_dock_client = NULL;
+		apj_dock_release_all(lock);
+	}
+}
+
+/* Minimised windows on the current workspace, newest first */
+short
+apj_dock_list(struct apj_dockent *e)
+{
+	struct xa_window *w;
+	short max, n = 0;
+
+	if (!e || (max = e[0].handle) <= 0)
+		return 0;
+
+	for (w = window_list; w && n < max; w = w->next)
+	{
+		if ((w->window_status & (XAWS_OPEN|XAWS_DOCKED)) != (XAWS_OPEN|XAWS_DOCKED)
+		    || (w->owner->status & CS_EXITING)
+		    || (w->wdesk >= 0 && w->wdesk != ws_current))
+			continue;
+		e[n].handle = w->handle;
+		e[n].apid = w->owner->p->pid;
+		strncpy(e[n].title, w->wname, sizeof(e[n].title) - 1);
+		e[n].title[sizeof(e[n].title) - 1] = '\0';
+		n++;
+	}
+	return n;
+}
+
+short
+apj_dock_restore(int lock, struct xa_window *w)
+{
+	GRECT r;
+
+	if (!w || (w->window_status & (XAWS_OPEN|XAWS_DOCKED)) != (XAWS_OPEN|XAWS_DOCKED)
+	    || !w->send_message || (w->owner->status & CS_EXITING))
+		return 0;
+
+	/* above the root again (still off-screen), on top and focused;
+	 * the owner's wind_set(WF_UNICONIFY) brings it back */
+	if (w->window_status & XAWS_BELOWROOT)
+	{
+		w->window_status &= ~XAWS_BELOWROOT;
+		top_window(lock, true, true, w);
+	}
+
+	r = w->ro;
+	if (w->opts & XAWO_WCOWORK)
+		r = f2w(&w->save_delta, &r, true);
+	w->t = r;
+	w->window_status |= XAWS_CHGICONIF;
+	w->send_message(lock, w, NULL, AMQ_NORM, QMF_CHKDUP,
+			WM_UNICONIFY, 0, 0, w->handle,
+			r.g_x, r.g_y, r.g_w, r.g_h);
+	return 1;
+}
+
+short
+apj_dock_restore_app(int lock, short apid)
+{
+	struct xa_window *w = window_list, *nxt;
+	short n = 0;
+
+	while (w)
+	{
+		nxt = w->next;
+		if (w->owner->p->pid == apid && (w->window_status & XAWS_DOCKED)
+		    && (w->wdesk < 0 || w->wdesk == ws_current))
+			n += apj_dock_restore(lock, w);
+		w = nxt;
+	}
+	return n;
+}
+
 void
 iconify_window(int lock, struct xa_window *wind, GRECT *r)
 {
+	if (apj_dockable(wind))
+	{
+		apj_dock_window(lock, wind, r);
+		return;
+	}
 	if ((r->g_w == -1 && r->g_h == -1) || (!r->g_w && !r->g_h) || (r->g_y + r->g_h + cfg.icnfy_b_y != screen.r.g_h))
 		*r = free_icon_pos(lock, NULL);
 
@@ -1346,6 +1524,16 @@ iconify_window(int lock, struct xa_window *wind, GRECT *r)
 void
 uniconify_window(int lock, struct xa_window *wind, GRECT *r)
 {
+	/* APJ-OS dock: an owner may uniconify a minimised window by itself */
+	if (wind->window_status & XAWS_DOCKED)
+	{
+		wind->window_status &= ~XAWS_DOCKED;
+		if (wind->window_status & XAWS_BELOWROOT)
+		{
+			wind->window_status &= ~XAWS_BELOWROOT;
+			top_window(lock, true, true, wind);
+		}
+	}
 	move_window(lock, wind, true, ~XAWS_ICONIFIED, r->g_x, r->g_y, r->g_w, r->g_h);
 	wind->window_status &= ~XAWS_CHGICONIF;
 

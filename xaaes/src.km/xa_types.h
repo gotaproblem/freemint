@@ -101,6 +101,7 @@ typedef enum xa_window_class WINDOW_CLASS;
 #define XAWS_RESIZED		0x00008000UL		/* if WM_SIZED to XaAES-(list-)window, evaluate in draw_object_tree() */
 #define XAWS_RM_WDG			0x00010000UL
 #define XAWS_WSHIDDEN		0x00020000UL	/* hidden by a workspace switch (Bespoke) */
+#define XAWS_DOCKED		0x00040000UL	/* minimised to the APJ-OS taskbar dock */
 #define XAWS_SEMA			0x80000000UL
 typedef unsigned long WINDOW_STATUS;
 
