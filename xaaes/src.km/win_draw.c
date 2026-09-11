@@ -602,6 +602,13 @@ apj_wc(struct xa_window *wind)
 	return (wc && (wc->flags & WCF_APJ)) ? 1 : 0;
 }
 
+/* exported for calc_work_area() (widgets.c) */
+short
+apj_window_fluent(struct xa_window *wind)
+{
+	return (short) apj_wc(wind);
+}
+
 /* height of the title font's cell for this window */
 static short
 apj_title_text_h(struct xa_window *wind)

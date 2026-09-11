@@ -2945,6 +2945,9 @@ calc_work_area(struct xa_window *wind)
 	int t_margin, b_margin, l_margin, r_margin;
 	short wa_borders = 0;
 	bool shaded = wind->window_status & XAWS_SHADED;
+	/* APJ-OS: a Fluent window is one flat surface inside its border -
+	 * no work area frame line on the sides no widget covers */
+	bool waf = wind->wa_frame && !apj_window_fluent(wind);
 
 	/* a colour work area frame is larger to allow for the
 	 * fancy borders :-) unless thinwork has been specified
@@ -2986,27 +2989,27 @@ calc_work_area(struct xa_window *wind)
 
 	rp_2_ap_row(wind);
 
-	if (wind->inner.g_y == wind->outer.g_y && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if (wind->inner.g_y == wind->outer.g_y && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_y += t_margin;
 		wind->wadelta.g_h += t_margin;
 		wa_borders |= WAB_TOP;
 	}
 
-	if (wind->inner.g_x == wind->outer.g_x && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if (wind->inner.g_x == wind->outer.g_x && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_x += l_margin;
 		wind->wadelta.g_w += l_margin;
 		wa_borders |= WAB_LEFT;
 	}
 
-	if ((wind->inner.g_y + wind->inner.g_h) == (wind->outer.g_y + wind->outer.g_h) && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if ((wind->inner.g_y + wind->inner.g_h) == (wind->outer.g_y + wind->outer.g_h) && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_h += b_margin;
 		wa_borders |= WAB_BOTTOM;
 	}
 
-	if ((wind->inner.g_x + wind->inner.g_w) == (wind->outer.g_x + wind->outer.g_w) && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if ((wind->inner.g_x + wind->inner.g_w) == (wind->outer.g_x + wind->outer.g_w) && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_w += r_margin;
 		wa_borders |= WAB_RIGHT;

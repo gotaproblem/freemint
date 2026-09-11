@@ -44,5 +44,11 @@ void apj_chrome_colours(void *wcols, short on, short ontop, short win_class);
  * gadgets on the right, closer last, no scrollbar arrows. */
 void apj_chrome_layout(void *theme, short on);
 
+/* 1 when this window has Fluent chrome (its colour set carries WCF_APJ):
+ * the work area then gets no extra 1px frame line on a side that no
+ * widget covers - it made the left border 3px against 2px elsewhere. */
+struct xa_window;
+short apj_window_fluent(struct xa_window *wind);
+
 
 #endif /* _wind_draw_h */
