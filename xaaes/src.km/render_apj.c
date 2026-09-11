@@ -5965,6 +5965,14 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 				lb.g_y = oby + iconblk->ib_ytext;
 				lb.g_w = tw + 6;
 				lb.g_h = iconblk->ib_htext;
+				/* a label box shorter than the font (the classic 8px
+				 * box): the pill covers the text, not just the box -
+				 * white text off the pill vanished on a white window */
+				if (th > lb.g_h)
+				{
+					lb.g_y = ty;
+					lb.g_h = th;
+				}
 				apj_flat_box(v, &lb, APJ_PEN(APJ_R_SELBG), APJ_PEN(APJ_R_SELBG));
 				(*v->api->t_color)(v, APJ_PEN(APJ_R_SELFG));
 			}
