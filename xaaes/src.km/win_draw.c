@@ -2220,22 +2220,29 @@ d_borders(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 			 * above's border ends, widened to the frame thickness. */
 			{
 				const short *in;
-				short n = apj_corner_steps(wind, &in), k;
+				short nt, nb, k;
 				short col = ((struct window_colours *)wind->colours)->frame_col;
 				short x1 = wind->r.g_x, x2 = wind->r.g_x + wind->r.g_w - 1;
 				short y1 = wind->r.g_y, y2 = wind->r.g_y + wind->r.g_h - 1;
 
-				for (k = 0; k < n; k++)
+				apj_corner_rows(wind, &in, &nt, &nb);
+				for (k = 0; k < nt || k < nb; k++)
 				{
 					short a = in[k];
 					short b = (k ? in[k - 1] - 1 : in[k]) + wind->frame - 1;
 
 					if (b < a + wind->frame - 1)
 						b = a + wind->frame - 1;
-					(*v->api->line)(v, x1 + a, y1 + k, x1 + b, y1 + k, col);
-					(*v->api->line)(v, x2 - b, y1 + k, x2 - a, y1 + k, col);
-					(*v->api->line)(v, x1 + a, y2 - k, x1 + b, y2 - k, col);
-					(*v->api->line)(v, x2 - b, y2 - k, x2 - a, y2 - k, col);
+					if (k < nt)
+					{
+						(*v->api->line)(v, x1 + a, y1 + k, x1 + b, y1 + k, col);
+						(*v->api->line)(v, x2 - b, y1 + k, x2 - a, y1 + k, col);
+					}
+					if (k < nb)
+					{
+						(*v->api->line)(v, x1 + a, y2 - k, x1 + b, y2 - k, col);
+						(*v->api->line)(v, x2 - b, y2 - k, x2 - a, y2 - k, col);
+					}
 				}
 			}
 		}
