@@ -2789,7 +2789,12 @@ move_window(int lock, struct xa_window *wind, bool blit, WINDOW_STATUS newstate,
 		 * beneath. At the new position they still show whatever was on
 		 * the screen (the blit, or the window's own old pixels), and
 		 * nothing below was told - so ask for them explicitly. */
-		ncb = apj_corner_boxes(wind, cb);
+		/* Only when the window really moved or changed size: a wind_set
+		 * of the same rectangle (many programs do that from their redraw
+		 * handler) must not send redraws to the windows below - two such
+		 * programs overlapping would redraw each other forever. */
+		ncb = (old.g_x != wind->r.g_x || old.g_y != wind->r.g_y ||
+		       old.g_w != wind->r.g_w || old.g_h != wind->r.g_h) ? apj_corner_boxes(wind, cb) : 0;
 
 		/* During a live drag or resize of this window every mouse step
 		 * lands here; four extra rect-list rebuilds and redraw messages to
