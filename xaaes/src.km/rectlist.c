@@ -28,6 +28,7 @@
 #include "c_window.h"
 #include "rectlist.h"
 #include "widgets.h"
+#include "win_draw.h"		/* apj_window_fluent */
 
 #define max(x,y) (((x)>(y))?(x):(y))
 #define min(x,y) (((x)<(y))?(x):(y))
@@ -223,11 +224,173 @@ build_rect_list(struct build_rl_parms *p)
 	return nrl;
 }
 
+/* ------------------------------------------------------------------ */
+/* APJ-OS Fluent rounded corners                                        */
+/* ------------------------------------------------------------------ */
+
+static short apj_cr_radius = -1;		/* radius the table was built for */
+static short apj_cr_n = 0;			/* rows with a non-zero inset */
+static short apj_cr_inset[16];
+
+static short
+apj_isqrt_round(long v)
+{
+	long s = 0;
+
+	while ((s + 1) * (s + 1) <= v)
+		s++;
+	if (v - s * s > s)		/* nearer the next integer */
+		s++;
+	return (short) s;
+}
+
+/* the corner radius for this window, 0 = square */
+static short
+apj_corner_radius(struct xa_window *w)
+{
+	short r;
+
+	if (!w || w == root_window || w->frame < 0 || !(w->active_widgets & NAME)
+	    || (w->dial & created_for_POPUP) || !apj_window_fluent(w))
+		return 0;
+
+	r = screen.r.g_h >= 1000 ? 8 : screen.r.g_h >= 700 ? 6 : 4;
+
+	if (w->r.g_w < 4 * r || w->r.g_h < 2 * r + 2)
+		return 0;
+
+	/* maximised: square, as Windows does */
+	if (w->r.g_x <= root_window->wa.g_x && w->r.g_y <= root_window->wa.g_y
+	    && w->r.g_x + w->r.g_w >= root_window->wa.g_x + root_window->wa.g_w
+	    && w->r.g_y + w->r.g_h >= root_window->wa.g_y + root_window->wa.g_h)
+		return 0;
+
+	return r;
+}
+
+/*
+ * Inset of each carved row of a quarter circle of radius r, row 0 at the
+ * outer edge: r - sqrt(r^2 - (r - k - 1/2)^2), in half-pixel integer
+ * arithmetic. r = 8 gives 5 3 2 1 1.
+ */
+short
+apj_corner_steps(struct xa_window *wind, const short **inset)
+{
+	short r = apj_corner_radius(wind), k;
+
+	if (!r)
+		return 0;
+	if (r != apj_cr_radius)
+	{
+		apj_cr_radius = r;
+		apj_cr_n = 0;
+		for (k = 0; k < r && k < 16; k++)
+		{
+			long m = 2L * r - 2L * k - 1;
+			short dx = apj_isqrt_round(4L * r * r - m * m);
+			short in = (short) ((2 * r - dx) / 2);
+
+			if (in <= 0)
+				break;
+			apj_cr_inset[k] = in;
+			apj_cr_n = k + 1;
+		}
+	}
+	if (inset)
+		*inset = apj_cr_inset;
+	return apj_cr_n;
+}
+
+/* The rounded shape as rects: merged top strips, body, bottom strips */
+short
+apj_shape_rects(struct xa_window *wind, GRECT *out)
+{
+	const short *in;
+	short n = apj_corner_steps(wind, &in), k, c = 0, pass;
+	GRECT r = wind->r;
+
+	if (!n)
+		return 0;
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		for (k = 0; k < n; )
+		{
+			short j = k;
+
+			while (j + 1 < n && in[j + 1] == in[k])
+				j++;
+			out[c].g_x = r.g_x + in[k];
+			out[c].g_w = r.g_w - 2 * in[k];
+			out[c].g_h = j - k + 1;
+			out[c].g_y = pass ? r.g_y + r.g_h - 1 - j : r.g_y + k;
+			c++;
+			k = j + 1;
+		}
+	}
+	out[c].g_x = r.g_x;
+	out[c].g_y = r.g_y + n;
+	out[c].g_w = r.g_w;
+	out[c].g_h = r.g_h - 2 * n;
+	c++;
+	return c;
+}
+
+/* The carved pieces, as occluders of the window's own list */
+static short
+apj_corner_wedges(struct xa_window *wind, GRECT *out)
+{
+	const short *in;
+	short n = apj_corner_steps(wind, &in), k, c = 0;
+	GRECT r = wind->r;
+
+	for (k = 0; k < n; )
+	{
+		short j = k, h;
+
+		while (j + 1 < n && in[j + 1] == in[k])
+			j++;
+		h = j - k + 1;
+		/* top-left, top-right, bottom-left, bottom-right */
+		out[c].g_x = r.g_x;                      out[c].g_y = r.g_y + k;             out[c].g_w = in[k]; out[c].g_h = h; c++;
+		out[c].g_x = r.g_x + r.g_w - in[k];      out[c].g_y = r.g_y + k;             out[c].g_w = in[k]; out[c].g_h = h; c++;
+		out[c].g_x = r.g_x;                      out[c].g_y = r.g_y + r.g_h - 1 - j; out[c].g_w = in[k]; out[c].g_h = h; c++;
+		out[c].g_x = r.g_x + r.g_w - in[k];      out[c].g_y = r.g_y + r.g_h - 1 - j; out[c].g_w = in[k]; out[c].g_h = h; c++;
+		k = j + 1;
+	}
+	return c;
+}
+
+/* The four corner areas (radius-sized boxes) - what a move must hand
+ * back to the windows beneath for redrawing */
+short
+apj_corner_boxes(struct xa_window *wind, GRECT *out)
+{
+	short n = apj_corner_steps(wind, NULL), w;
+	GRECT r = wind->r;
+
+	if (!n)
+		return 0;
+	w = apj_cr_inset[0];
+	out[0].g_x = r.g_x;             out[0].g_y = r.g_y;             out[0].g_w = w; out[0].g_h = n;
+	out[1].g_x = r.g_x + r.g_w - w; out[1].g_y = r.g_y;             out[1].g_w = w; out[1].g_h = n;
+	out[2].g_x = r.g_x;             out[2].g_y = r.g_y + r.g_h - n; out[2].g_w = w; out[2].g_h = n;
+	out[3].g_x = r.g_x + r.g_w - w; out[3].g_y = r.g_y + r.g_h - n; out[3].g_w = w; out[3].g_h = n;
+	return 4;
+}
+
 static int
 nextwind_rect(struct build_rl_parms *p)
 {
 	int ret = 0;
 	struct xa_window *wind = p->ptr1;
+
+	/* APJ-OS: the rest of a rounded occluder, or our own corner steps */
+	if (p->ishape < p->nshape)
+	{
+		p->next_r = &p->shape[p->ishape++];
+		return 1;
+	}
 
 
 	while (wind && !ret)
@@ -238,7 +401,16 @@ nextwind_rect(struct build_rl_parms *p)
 		if (!(wind->owner->status & CS_EXITING) && !(wind->active_widgets & STORE_BACK) &&
 		     (wind->window_status & (XAWS_HIDDEN|XAWS_OPEN)) == XAWS_OPEN)
 		{
-			p->next_r = &wind->r;
+			short ns = apj_shape_rects(wind, p->shape);
+
+			if (ns > 0)
+			{
+				p->nshape = ns;
+				p->ishape = 1;
+				p->next_r = &p->shape[0];
+			}
+			else
+				p->next_r = &wind->r;
 			//wind = wind->prev;
 			ret = 1;
 			//break;
@@ -313,6 +485,9 @@ make_rect_list(struct xa_window *wind, bool swap, short which)
 
 	p.getnxtrect = nextwind_rect;
 	p.area = &area;
+	/* APJ-OS: a rounded window's own corner steps are not its to draw */
+	p.nshape = apj_corner_wedges(wind, p.shape);
+	p.ishape = 0;
 	if (!wind->prev && !wind->nolist)
 		p.ptr1 = S.open_nlwindows.last;
 	else

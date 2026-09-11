@@ -970,6 +970,7 @@ apj_chrome_apply(int lock, struct xa_client *client, short on)
 
 		apj_chrome_colours(w->ontop_cols, on, 1, w->class);
 		apj_chrome_colours(w->untop_cols, on, 0, w->class);
+		w->x_shadow = w->y_shadow = apj_window_fluent(w) ? 0 : 1;
 
 		if (w->nolist)
 			continue;
@@ -1598,6 +1599,10 @@ create_window(
 
 	w->x_shadow = 1;
 	w->y_shadow = 1;
+	/* APJ-OS: a Fluent window has no hard 1px drop shadow - it would
+	 * draw a black step across a rounded corner */
+	if (apj_window_fluent(w))
+		w->x_shadow = w->y_shadow = 0;
 	w->wa_frame = true;
 
 	if (nolist)
@@ -2750,7 +2755,18 @@ move_window(int lock, struct xa_window *wind, bool blit, WINDOW_STATUS newstate,
 	if ((wind->window_status & XAWS_OPEN) && !(wind->dial & created_for_SLIST) && !(wind->active_widgets & STORE_BACK))
 	{
 		struct xa_window *nxt = wind->nolist ? (wind->next ? wind->next : window_list) : wind->next;
+		GRECT cb[4];
+		short i, ncb;
+
 		update_windows_below(lock, &old, &new, nxt, NULL);
+
+		/* APJ-OS: the corners of a rounded window belong to what lies
+		 * beneath. At the new position they still show whatever was on
+		 * the screen (the blit, or the window's own old pixels), and
+		 * nothing below was told - so ask for them explicitly. */
+		ncb = apj_corner_boxes(wind, cb);
+		for (i = 0; i < ncb; i++)
+			update_windows_below(lock, &cb[i], NULL, nxt, NULL);
 	}
 
 	/*

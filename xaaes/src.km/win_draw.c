@@ -2212,6 +2212,32 @@ d_borders(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 				r.g_w -= 2;
 				r.g_h -= 2;
 			}
+
+			/* APJ-OS rounded corners: the rect list has carved the corner
+			 * steps out of this window, which clips the vertical border
+			 * lines on those rows. Put the border back along the curve:
+			 * on each carved row, from its inset across to where the row
+			 * above's border ends, widened to the frame thickness. */
+			{
+				const short *in;
+				short n = apj_corner_steps(wind, &in), k;
+				short col = ((struct window_colours *)wind->colours)->frame_col;
+				short x1 = wind->r.g_x, x2 = wind->r.g_x + wind->r.g_w - 1;
+				short y1 = wind->r.g_y, y2 = wind->r.g_y + wind->r.g_h - 1;
+
+				for (k = 0; k < n; k++)
+				{
+					short a = in[k];
+					short b = (k ? in[k - 1] - 1 : in[k]) + wind->frame - 1;
+
+					if (b < a + wind->frame - 1)
+						b = a + wind->frame - 1;
+					(*v->api->line)(v, x1 + a, y1 + k, x1 + b, y1 + k, col);
+					(*v->api->line)(v, x2 - b, y1 + k, x2 - a, y1 + k, col);
+					(*v->api->line)(v, x1 + a, y2 - k, x1 + b, y2 - k, col);
+					(*v->api->line)(v, x2 - b, y2 - k, x2 - a, y2 - k, col);
+				}
+			}
 		}
 	}
 	return true;
