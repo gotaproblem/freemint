@@ -3569,6 +3569,47 @@ static bool join_redraws( short wlock, struct xa_window *wind, struct xa_rect_li
 	return false;
 }
 
+/*
+ * APJ-OS: reorder blit rects (window-relative) so that copying each one by
+ * (dx, dy) never lands on a rect that has not been copied yet. Such an
+ * order always exists for disjoint rectangles moved by one offset.
+ */
+static void
+apj_blit_order(struct xa_rect_list **list, short dx, short dy)
+{
+	struct xa_rect_list *done = NULL, **tail = &done;
+
+	while (*list)
+	{
+		struct xa_rect_list **pick = list, **pp, *q;
+
+		for (pp = list; *pp; pp = &(*pp)->next)
+		{
+			short x1 = (*pp)->r.g_x + dx, y1 = (*pp)->r.g_y + dy;
+			short x2 = x1 + (*pp)->r.g_w, y2 = y1 + (*pp)->r.g_h;
+
+			for (q = *list; q; q = q->next)
+			{
+				if (q != *pp &&
+				    x1 < q->r.g_x + q->r.g_w && q->r.g_x < x2 &&
+				    y1 < q->r.g_y + q->r.g_h && q->r.g_y < y2)
+					break;
+			}
+			if (!q)
+			{
+				pick = pp;
+				break;
+			}
+		}
+		q = *pick;
+		*pick = q->next;
+		q->next = NULL;
+		*tail = q;
+		tail = &q->next;
+	}
+	*list = done;
+}
+
 static void
 set_and_update_window(struct xa_window *wind, bool blit, bool only_wa, GRECT *new)
 {
@@ -3951,19 +3992,14 @@ set_and_update_window(struct xa_window *wind, bool blit, bool only_wa, GRECT *ne
 			 */
 			if (xmove || ymove)
 			{
-				struct xa_rect_list *trl = 0;
-				nrl = brl;
+				/* APJ-OS: an order in which no blit overwrites a source still to
+				 * be copied. The sort above assumes the stock band-shaped lists;
+				 * a rounded window's strips (and their occluder splits) break it
+				 * and left stale copies inside the window when dragged quickly. */
+				apj_blit_order(&brl, (dir & 2) ? xmove : -xmove, (dir & 1) ? ymove : -ymove);
 				hidem();
-				while (nrl)
+				for (nrl = brl; nrl; nrl = nrl->next)
 				{
-					/* first blit lower rect if two left, moving down and upper rect partly hidden by menubar (see build_rectlist - surely a hack ..) */
-					if( menu_window && cfg.menu_bar && (dir & 1) && nrl->r.g_y < menu_window->r.g_h )
-						if( nrl->next && !nrl->next->next && nrl->r.g_y + nrl->r.g_h == nrl->next->r.g_y && !trl )
-						{
-							trl = nrl;
-							nrl = nrl->next;
-							dir = 0;
-						}
 					bd = nrl->r;
 					bs.g_x = bd.g_x + new->g_x;
 					bs.g_y = bd.g_y + new->g_y;
@@ -3971,20 +4007,7 @@ set_and_update_window(struct xa_window *wind, bool blit, bool only_wa, GRECT *ne
 					bs.g_h = bd.g_h;
 					bd.g_x += old.g_x;
 					bd.g_y += old.g_y;
-					//DIAGS(("Blitting from %d/%d/%d/%d to %d/%d/%d/%d (%lx, %lx)",
-					//	bd, bs, brl, (long)brl->next));
 					(*xa_vdiapi->form_copy)(&bd, &bs);
-					if( trl )
-					{
-						if( nrl == trl )
-						{
-							nrl = 0;	//nrl->next->next;
-							trl = 0;
-						}
-						nrl = trl;
-					}
-					else
-						nrl = nrl->next;
 				}
 				showm();
 			}
