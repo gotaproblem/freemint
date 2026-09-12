@@ -7,6 +7,8 @@
 #include "apj_dragstat.h"
 #include "mint/fcntl.h"
 
+#if APJ_DRAGSTAT
+
 struct apj_ds
 {
 	short active;
@@ -177,3 +179,5 @@ apj_ds_end(const char *owner)
 		ds.why[1], ds.why[2], ds.why[3], ds.why[4]);
 	ds_write(buf, l);
 }
+
+#endif /* APJ_DRAGSTAT */

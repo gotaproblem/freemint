@@ -24,6 +24,11 @@
 #ifndef _apj_dragstat_h_
 #define _apj_dragstat_h_
 
+/* Off by default: every drag would append to DRAGSTAT.LOG for ever.
+ * Set to 1 to measure. */
+#define APJ_DRAGSTAT 0
+
+#if APJ_DRAGSTAT
 /* k_mouse.c: XA_move_event posted the sampled position to the owner */
 void apj_ds_sample(short x, short y);
 /* k_mouse.c: adi_move - a pointer packet arrived; blocked = C.move_block */
@@ -37,5 +42,13 @@ void apj_ds_set(long nred);
 void apj_ds_unblock(short why);
 /* k_mouse.c: button released while a widget was active */
 void apj_ds_end(const char *owner);
+#else
+#define apj_ds_sample(x, y)	do { } while (0)
+#define apj_ds_motion(b)	do { } while (0)
+#define apj_ds_moved()		do { } while (0)
+#define apj_ds_set(n)		do { } while (0)
+#define apj_ds_unblock(w)	do { } while (0)
+#define apj_ds_end(o)		do { } while (0)
+#endif
 
 #endif
