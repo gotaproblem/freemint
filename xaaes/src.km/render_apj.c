@@ -5972,16 +5972,17 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 	char lc = iconblk->ib_char;
 	short tx,ty,pnt[4];
 	char *lt = iconblk->ib_ptext, lbuf[40];
-	short fluent = (apj_active && !MONO) ? 1 : 0;
 
 	if( !lc && (!lt || !*lt) )
 		return;
 
 	/* APJ-OS: the icon character (a drive letter) goes into the label -
-	 * "HARD DISC C" - in the label's own antialiased text. Drawn over the
-	 * image, in the resource's colour and at small-font offsets, it was
-	 * black on the dark Papirus drives and only showed when selected. */
-	if (fluent && lc > ' ')
+	 * "HARD DISC C" - in the label's own text. Drawn over the image, in
+	 * the resource's colour and at the stock 6x6 offsets, it was black on
+	 * the dark Papirus drives and only showed when selected; on a classic
+	 * theme it landed in the middle of the artwork. The label box has room
+	 * for it in either theme, so this is not Fluent-only. */
+	if (lc > ' ' && iconblk->ib_wtext && iconblk->ib_htext)
 	{
 		short k = 0;
 
@@ -6016,12 +6017,13 @@ icon_characters(struct xa_vdi_settings *v, struct theme *theme, ICONBLK *iconblk
 	{
 		short tw, th;
 
+		/* APJ-OS: measure the font that is about to draw the label.
+		 * The stock maths is strlen * 6 - the 6x6 system small font of
+		 * 1985. With a replacement small font (the APJ set on a 1080p
+		 * screen) the label was centred as if it were half its real
+		 * width, so it sat right of its box and overran the end. A real
+		 * 6x6 font measures 6, so measuring is right in both themes. */
 		(*v->api->t_extent)(v, lt, &tw, &th);
-		if (!(apj_active && !MONO))
-		{
-			tw = strlen(lt) * 6;		/* the stock small-font maths */
-			th = 6;
-		}
 		tx = obx + iconblk->ib_xtext + ((iconblk->ib_wtext - tw) / 2);
 		ty = oby + iconblk->ib_ytext + ((iconblk->ib_htext - th) / 2);
 
