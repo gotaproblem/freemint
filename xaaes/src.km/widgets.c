@@ -3018,10 +3018,33 @@ calc_work_area(struct xa_window *wind)
 		wa_borders |= WAB_RIGHT;
 	}
 
-	if (wind->frame >= 0 && !wind->thinwork && !apj_bare_window(wind))
+	/* the 2 px ring the stock 3D bevel needs - not on a Fluent window,
+	 * which draws no bevel (win_draw.c d_waframe) */
+	if (wind->frame >= 0 && !wind->thinwork && !apj_bare_window(wind) &&
+	    !apj_window_fluent(wind))
 	{
 		wind->wadelta.g_x += 2, wind->wadelta.g_y += 2;
 		wind->wadelta.g_w += 4, wind->wadelta.g_h += 4;
+	}
+
+	/*
+	 * APJ-OS: the bottom corners are only rounded over rows below the work
+	 * area (rectlist.c apj_corner_rows - carving into the work area would
+	 * split every program's redraw into three passes). The title bar gives
+	 * the top its full curve; a window with nothing along its bottom edge
+	 * had only the frame rows down there and came out square. Give such a
+	 * Fluent window a bottom border as deep as the radius, painted in the
+	 * border colour by d_borders(). Windows with a slider or info line at
+	 * the bottom already have the room.
+	 */
+	if (wind->frame >= 0 && apj_window_fluent(wind) && !apj_bare_window(wind) &&
+	    (wind->inner.g_y + wind->inner.g_h) == (wind->outer.g_y + wind->outer.g_h))
+	{
+		short want = apj_round_radius();
+		short have = (wind->frame > 0 ? wind->frame : 0) + wind->y_shadow;
+
+		if (want > have)
+			wind->wadelta.g_h += want - have;
 	}
 
 	wind->wa_borders = wa_borders;

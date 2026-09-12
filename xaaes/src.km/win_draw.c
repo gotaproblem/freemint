@@ -2232,6 +2232,26 @@ d_borders(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 				r.g_h -= 2;
 			}
 
+			/* APJ-OS: the rows between the work area and the bottom frame
+			 * that calc_work_area() reserved for the curve - paint them in
+			 * the border colour so nothing shows through */
+			if (apj_wc(wind))
+			{
+				GRECT b;
+
+				b.g_x = wind->r.g_x + wind->frame;
+				b.g_y = wind->wa.g_y + wind->wa.g_h;
+				b.g_w = wind->r.g_w - 2 * wind->frame - wind->x_shadow;
+				b.g_h = (wind->r.g_y + wind->r.g_h - wind->frame - wind->y_shadow) - b.g_y;
+				if (b.g_w > 0 && b.g_h > 0)
+				{
+					(*v->api->wr_mode)(v, MD_REPLACE);
+					(*v->api->f_interior)(v, FIS_SOLID);
+					(*v->api->f_color)(v, wci->normal.c);
+					(*v->api->gbar)(v, 0, &b);
+				}
+			}
+
 			/* APJ-OS rounded corners: the rect list has carved the corner
 			 * steps out of this window, which clips the vertical border
 			 * lines on those rows. Put the border back along the curve:
