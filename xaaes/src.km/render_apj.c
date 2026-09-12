@@ -2224,6 +2224,76 @@ apj_rsc_table(int selected)
 	}
 	return selected ? apj_rsc_sel : apj_rsc_colour;
 }
+
+/*
+ * Perceived brightness of a pen, 0..1000: a theme pen from the role table
+ * it was loaded from, a stock pen from what the VDI-16 palette means.
+ */
+static short
+apj_pen_lum(short pen)
+{
+	static const short stock[16][3] = {
+		{1000,1000,1000},{0,0,0},{1000,0,0},{0,1000,0},{0,0,1000},{0,1000,1000},{1000,1000,0},{1000,0,1000},
+		{ 750, 750, 750},{500,500,500},{750,0,0},{0,750,0},{0,0,750},{0,750,750},{750,750,0},{750,0,750}
+	};
+	const short *c;
+
+	if (pen >= APJ_PEN_BASE && pen < APJ_PEN_BASE + APJ_R_N)
+	{
+		struct rgb_1000 *t = &apj_rgb[pen - APJ_PEN_BASE];
+		return (short) ((t->red * 30L + t->green * 59L + t->blue * 11L) / 100L);
+	}
+	c = stock[(pen >= 0 && pen < 16) ? pen : G_BLACK];
+	return (short) ((c[0] * 30L + c[1] * 59L + c[2] * 11L) / 100L);
+}
+
+/*
+ * The text pen to put on a fill: whichever of the theme's text, paper,
+ * dark and light is furthest in brightness from it. A dark theme's accent
+ * is a light blue, and its text - near white - vanished on it; a resource
+ * that asks for "white" text on a box meant "the one that shows".
+ */
+static short
+apj_ink_on(short fillpen)
+{
+	static const short roles[4] = { APJ_R_TEXT, APJ_R_PAPER, APJ_R_DARK, APJ_R_LIGHT };
+	short bg = apj_pen_lum(fillpen), best = APJ_PEN(APJ_R_TEXT), bestd = -1, i;
+
+	for (i = 0; i < 4; i++)
+	{
+		short d = apj_pen_lum(APJ_PEN(roles[i])) - bg;
+
+		if (d < 0)
+			d = -d;
+		if (d > bestd)
+		{
+			bestd = d;
+			best = APJ_PEN(roles[i]);
+		}
+	}
+	return best;
+}
+
+/*
+ * A text object's own colour word under the theme. Black or white text
+ * is "ink": it goes on whatever the object is filled with - its own solid
+ * fill if it has one (mapped through the resource table), else the panel.
+ * Any other colour the resource chose deliberately is left as it is.
+ */
+static short
+apj_text_ink(short textcol, BFOBSPEC *c)
+{
+	short fill;
+
+	if (!apj_active || MONO || (textcol != G_BLACK && textcol != G_WHITE))
+		return textcol;
+	(void) apj_rsc_table(0);
+	if (c && c->fillpattern != IP_HOLLOW && c->interiorcol >= 0 && c->interiorcol < 16)
+		fill = apj_rsc_colour[c->interiorcol];
+	else
+		fill = APJ_PEN(APJ_R_PANEL);
+	return apj_ink_on(fill);
+}
 static const short efx3d_colour[] =      {8, 9,10,11,12,13,14,15, 0, 1, 2, 3, 4, 5, 6, 7};
 
 /* ************************************************************ */
@@ -4588,7 +4658,7 @@ d_g_fboxtext(struct widget_tree *wt, struct xa_vdi_settings *v)
 		}
 		else
 		{
-			f_fg = c.textcol;
+			f_fg = apj_text_ink(c.textcol, &c);
 			f_bg = G_WHITE;
 		}
 
@@ -5730,7 +5800,7 @@ apj_button(struct widget_tree *wt, struct xa_vdi_settings *v, struct color_theme
 	else if (ob->ob_flags & OF_DEFAULT)
 	{
 		fill = APJ_PEN(APJ_R_ACCENT);
-		fg   = APJ_PEN(APJ_R_SELFG);
+		fg   = apj_ink_on(fill);	/* dark on a light accent, light on a dark one */
 	}
 	else
 	{
@@ -6631,7 +6701,7 @@ drw_g_text(struct widget_tree *wt, struct xa_vdi_settings *v, bool ftext)
 	}
 	else
 	{
-		f_fg = c.textcol;
+		f_fg = apj_text_ink(c.textcol, &c);
 	}
 
 	ob_text(wt, v, ei, ct, &gr, &r, disabled ? NULL : &c, fwr_mode, f_fg, -1, -1, G_WHITE, G_LBLUE, G_BLUE, temp_text, ob->ob_state, 0, -1, G_BLACK);
