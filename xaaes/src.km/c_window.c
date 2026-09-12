@@ -33,6 +33,7 @@
 #include "menuwidg.h"
 #include "draw_obj.h"
 #include "render_apj.h"
+#include "apj_dragstat.h"
 #include "win_draw.h"
 #include "rectlist.h"
 #include "scrlobjc.h"
@@ -1135,6 +1136,7 @@ send_moved(int lock, struct xa_window *wind, short amq, GRECT *r)
 	if (wind->send_message)
 	{
 		C.move_block = 2;
+		apj_ds_moved();
 		wind->send_message(lock, wind, NULL, amq, QMF_CHKDUP,
 			WM_MOVED, 0, 0, wind->handle,
 			r->g_x, r->g_y, r->g_w, r->g_h);
@@ -3046,8 +3048,13 @@ move_window(int lock, struct xa_window *wind, bool blit, WINDOW_STATUS newstate,
 	 * being generated (C.move_block is set to 3 when WM_REDRAWS
 	 * are added to a clients msg queue), we release move_block here
 	 */
+	if (widget_active.widg && widget_active.wind == wind)
+		apj_ds_set(C.redraws);
 	if (!C.redraws && C.move_block != 3)
+	{
+		apj_ds_unblock(2);
 		C.move_block = 0;
+	}
 	{
 		short y = old.g_y < new.g_y ? old.g_y : new.g_y;
 		if( !cfg.menu_ontop && cfg.menu_bar && y < get_menu_height() )

@@ -10,6 +10,7 @@ HEADER = \
 	c_keybd.h \
 	c_mouse.h \
 	c_window.h \
+	apj_dragstat.h \
 	xacookie.h \
 	cnf_xaaes.h \
 	debug.h \
@@ -80,6 +81,7 @@ COBJS = \
 	c_keybd.c \
 	c_mouse.c \
 	c_window.c \
+	apj_dragstat.c \
 	xacookie.c \
 	debug.c \
 	desktop.c \

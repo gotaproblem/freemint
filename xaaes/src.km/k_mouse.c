@@ -44,6 +44,7 @@
 #include "scrlobjc.h"
 #include "taskman.h"
 #include "widgets.h"
+#include "apj_dragstat.h"
 #include "mint/dcntl.h"
 #include "mint/fcntl.h"
 #include "mint/signal.h"
@@ -413,6 +414,7 @@ XA_button_event(int lock, const struct moose_data *md, bool widgets)
 		{
 			widget_active.m = *md;
 			client = widget_active.wind->owner;
+			apj_ds_end(client->name);
 			if (!(client->status & CS_EXITING))
 			{
 				DIAGA(("XA_button_event: post active widget (move) to %s", client->name));
@@ -612,6 +614,7 @@ XA_move_event(int lock, const struct moose_data *md)
 			{
 				DIAG((D_mouse, client, "post active widget (move) to %s", client->name));
 				C.move_block = 1;
+				apj_ds_sample(md->sx, md->sy);
 				post_cevent(client, cXA_active_widget, NULL,NULL, 0,0, NULL, md);
 			}
 			return false;
@@ -952,6 +955,7 @@ move_rtimeout(struct proc *p, long arg)
 	}
 
 	C.redraws = 0;
+	apj_ds_unblock(4);
 	C.move_block = 0;
 	m_rto = 0;
 
@@ -1066,6 +1070,7 @@ adi_move(struct adif *a, short x, short y)
 	x_mouse = x;
 	y_mouse = y;
 
+	apj_ds_motion(C.move_block);
 	if (C.move_block) //C.redraws)
 	{
 		/*
@@ -1098,6 +1103,7 @@ kick_mousemove_timeout(void)
 
 	if (!C.redraws)
 	{
+		apj_ds_unblock(3);
 		C.move_block = 0;
 		if (m_rto)
 		{
