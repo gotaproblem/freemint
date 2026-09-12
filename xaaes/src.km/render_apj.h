@@ -62,6 +62,19 @@ short apj_theme_commit(void);		/* opcode 113: apply to the object theme */
 short apj_theme_query(long *rgb);	/* opcode 115: APJ_R_N x 0xRRGGBB into rgb[]; 0 if no theme */
 
 /*
+ * Broadcast to every client when the theme is committed (opcode 113) or
+ * reset (112). A client that draws itself - MP3GEM, VIDGEM, PSMON - has
+ * loaded the nineteen role colours into its own workstation once, in
+ * apj_init(), and has no other way to learn they changed; the APJSKIN
+ * engine also reloads its sheet on this. msg[0] only; msg[1] = the AES.
+ *
+ * Must match APJ_SKINCHG in apj-os-tools/apjgui/apjskin.h.
+ */
+#define APJ_SKINCHG	0x4A50
+
+/* the broadcast itself lives in xa_appl.c, which has the client list */
+
+/*
  * Opcode 114: draw antialiased text on the client's behalf. The desktop
  * draws its own UI (taskbar, panels, directory listings) with v_gtext on
  * its own workstation, which the renderer never sees; this lets it use

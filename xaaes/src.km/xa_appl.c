@@ -1673,6 +1673,32 @@ XA_appl_find(int lock, struct xa_client *client, AESPB *pb)
 }
 
 /*
+ * Tell every client the theme changed. A client that draws its own window -
+ * MP3GEM, VIDGEM, PSMON - loaded the nineteen role colours into its own
+ * workstation once, in apj_init(), and has no other way to learn they moved;
+ * the APJSKIN engine also reloads its sheet on this. Sent on both the
+ * commit (113) and the reset (112).
+ */
+static void
+apj_broadcast_skinchg(int lock, struct xa_client *from)
+{
+	struct xa_client *cl;
+	union msg_buf m;
+
+	bzero(&m, sizeof(m));
+	m.m[0] = APJ_SKINCHG;
+	m.m[1] = C.Aes ? C.Aes->p->pid : 0;
+
+	Sema_Up(LOCK_CLIENTS);
+	FOREACH_CLIENT(cl)
+	{
+		if (is_client(cl) && cl != from)
+			send_a_message(lock, cl, AMQ_NORM, QMF_CHKDUP, &m);
+	}
+	Sema_Dn(LOCK_CLIENTS);
+}
+
+/*
  * Extended XaAES calls
  */
 unsigned long
@@ -1858,6 +1884,7 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			/* menu bar back to stock height and layout */
 			apj_menu_relayout(lock);
 			apj_flush_wc_caches();
+			apj_broadcast_skinchg(lock, client);
 			break;
 		}
 		case 116:						/* APJ dock: addrin[0] = 1 register / 0 leave */
@@ -1905,6 +1932,8 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 				/* Fluent menu bar and drop-downs (phase 2) */
 				apj_menu_relayout(lock);
 				apj_flush_wc_caches();
+				/* self-drawing clients reload their pens and their skin */
+				apj_broadcast_skinchg(lock, client);
 			}
 			else
 				ret = 0;
