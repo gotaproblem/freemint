@@ -33,6 +33,7 @@
 #include "xa_global.h"
 #include "xa_evnt.h"
 #include "rectlist.h"
+#include "render_apj.h"
 
 
 static void queue_message(int lock, struct xa_client *dest_client, short amq, short qmf, union msg_buf *msg);
@@ -686,7 +687,13 @@ send_a_message(int lock, struct xa_client *dest_client, short amq, short qmf, un
 					hidem();
 					(*v->api->set_clip)(v, r);
 
-					(*v->api->f_color)(v, 9);
+					/* A client inside a file selector or a form cannot
+					 * repaint: hold the area with a plain fill and hand
+					 * it the redraw when it comes back. Stock grey (9);
+					 * under a theme the panel colour, so a dark desk does
+					 * not grow a light-grey block. */
+					(*v->api->f_color)(v, (apj_theme_active() && screen.colours >= 16)
+					                      ? APJ_PEN(APJ_R_PANEL) : 9);
 					(*v->api->wr_mode)(v, MD_REPLACE);
 					(*v->api->f_interior)(v, FIS_SOLID);
 					(*v->api->bar)(v, 0, r->g_x, r->g_y, r->g_w, r->g_h);
