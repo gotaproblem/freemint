@@ -22,6 +22,7 @@ struct apj_ds
 	long sum_rdrw, max_rdrw;	/* wind_set -> all redraws done */
 	long sum_red,  max_red;		/* WM_REDRAWs generated per step */
 	long sum_step, max_step;	/* px per step (larger axis) */
+	long max_gap;			/* longest time between two samples */
 	long hist[7];			/* 1, 2, 3-4, 5-8, 9-16, 17-32, >32 */
 	long motion, skipped;		/* pointer packets: all, while blocked */
 	long why[5];
@@ -29,10 +30,15 @@ struct apj_ds
 
 static struct apj_ds ds;
 
+/* The kernel's xtime (utc) only advances when somebody calls
+ * gettimeofday, so it is useless inside one drag step: every phase read
+ * 0 and the sec/usec pair tore once into a 1000 ms "maximum". The 200 Hz
+ * system counter is what the kernel itself derives xtime from; the
+ * module runs in supervisor mode, so read it directly. 5 ms resolution. */
 static long
 now_ms(void)
 {
-	return utc.tv_sec * 1000L + utc.tv_usec / 1000L;
+	return *(volatile long *)0x4baL * 5L;
 }
 
 static void
@@ -65,6 +71,8 @@ apj_ds_sample(short x, short y)
 		i = d <= 1 ? 0 : d == 2 ? 1 : d <= 4 ? 2 : d <= 8 ? 3 : d <= 16 ? 4 : d <= 32 ? 5 : 6;
 		ds.hist[i]++;
 	}
+	if (ds.have_prev && t - ds.t_sample > ds.max_gap)
+		ds.max_gap = t - ds.t_sample;
 	ds.px = x, ds.py = y;
 	ds.have_prev = 1;
 	ds.t_sample = t;
@@ -154,13 +162,13 @@ apj_ds_end(const char *owner)
 	ms = now_ms() - ds.t_start;
 
 	l = sprintf(buf, sizeof(buf),
-		"drag %s: %ld ms, %ld steps (%ld ms/step), pointer packets %ld of which %ld arrived while blocked\r\n"
+		"drag %s: %ld ms, %ld steps (%ld ms/step, longest gap %ld ms), pointer packets %ld of which %ld arrived while blocked\r\n"
 		"  wake  sample->WM_MOVED   avg %ld max %ld ms\r\n"
 		"  app   WM_MOVED->wind_set avg %ld max %ld ms\r\n"
 		"  redraw wind_set->done    avg %ld max %ld ms, WM_REDRAWs/step avg %ld max %ld\r\n"
 		"  step px avg %ld max %ld  hist 1:%ld 2:%ld 3-4:%ld 5-8:%ld 9-16:%ld 17-32:%ld >32:%ld\r\n"
 		"  unblocked by: cevent-only %ld, no-redraws %ld, redraws-done %ld, timeout %ld\r\n",
-		owner ? owner : "?", ms, ds.n_steps, ms / n, ds.motion, ds.skipped,
+		owner ? owner : "?", ms, ds.n_steps, ms / n, ds.max_gap, ds.motion, ds.skipped,
 		ds.sum_wake / n, ds.max_wake,
 		ds.sum_app / n, ds.max_app,
 		ds.sum_rdrw / n, ds.max_rdrw, ds.sum_red / n, ds.max_red,
