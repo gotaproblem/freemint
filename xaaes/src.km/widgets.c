@@ -967,6 +967,15 @@ CE_redraw_menu(int lock, struct c_event *ce, short cancel)
 void
 redraw_menu(int lock)
 {
+	redraw_menu_clip(lock, NULL);
+}
+
+/* APJ-OS: the same, but only the part of the bar inside clip (NULL = all
+ * of it) when it can be drawn from here; a redraw posted to another owner
+ * repaints the whole bar, which costs nothing worth a second cevent type */
+void
+redraw_menu_clip(int lock, const GRECT *clip)
+{
 	struct xa_client *rc, *mc;
 	struct xa_widget *widg;
 
@@ -1003,6 +1012,8 @@ redraw_menu(int lock)
 		/* menubar always top */
 		rl.r.g_w = get_menu_widg()->r.g_w;
 		rl.r.g_h = get_menu_widg()->r.g_h;
+		if (clip)
+			rl.r = *clip;
 
 		display_widget(lock, root_window, widg, &rl);
 	}

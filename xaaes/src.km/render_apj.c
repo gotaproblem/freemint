@@ -4846,6 +4846,73 @@ apj_theme_active(void)
 	return apj_active;
 }
 
+/* ---- the menu-bar clock (opcode 121) ------------------------------- */
+
+static char apj_clock[APJ_MENUCLOCK_MAX];
+
+/* widgets.c; its header drags in xa_global.h, which this module keeps out */
+void redraw_menu_clip(int lock, const GRECT *clip);
+
+const char *
+apj_menuclock_text(void)
+{
+	return apj_clock;
+}
+
+/* the strip the clock lives in: the bar's right-hand quarter is far more
+ * than any date and time need, and never reaches a menu title */
+static void
+apj_clock_strip(GRECT *r)
+{
+	struct xa_widget *widg = &root_window->widgets[XAW_MENU];
+
+	*r = widg->r;
+	r->g_x += (short) (r->g_w - r->g_w / 4);
+	r->g_w = (short) (r->g_w / 4);
+}
+
+short
+apj_menuclock_set(int lock, const char *s)
+{
+	char t[APJ_MENUCLOCK_MAX];
+	int i;
+
+	for (i = 0; s && s[i] && i < APJ_MENUCLOCK_MAX - 1; i++)
+		t[i] = s[i];
+	t[i] = '\0';
+
+	if (!apj_active || MONO)
+	{
+		apj_clock[0] = '\0';
+		return 0;
+	}
+	if (strcmp(t, apj_clock) != 0)
+	{
+		GRECT strip;
+
+		strcpy(apj_clock, t);
+		apj_clock_strip(&strip);
+		redraw_menu_clip(lock, &strip);
+	}
+	return 1;
+}
+
+void
+apj_menu_clock(struct xa_vdi_settings *v, const GRECT *bar)
+{
+	short w, h, x, y;
+
+	if (!apj_active || MONO || !apj_clock[0])
+		return;
+	(*v->api->t_font)(v, screen->standard_font_point, screen->standard_font_id);
+	(*v->api->t_effects)(v, 0);
+	(*v->api->t_extent)(v, apj_clock, &w, &h);
+	x = (short) (bar->g_x + bar->g_w - w - screen->c_max_w);
+	y = (short) (bar->g_y + (bar->g_h - screen->c_max_h) / 2);
+	(*v->api->wr_mode)(v, MD_TRANS);
+	apj_menu_text(v, x, y, APJ_PEN(APJ_R_TEXT), apj_clock);
+}
+
 /*
  * The scroll lists (file selector, task manager, about box) draw with
  * pens written into their tables in 1999: black text on white paper,

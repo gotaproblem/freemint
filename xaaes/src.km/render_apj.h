@@ -58,6 +58,18 @@ enum
 short apj_theme_set(long val);		/* opcode 111: (role<<24)|RGB; 1 ok, 0 bad */
 short apj_theme_reset(void);		/* opcode 112: back to the stock look */
 short apj_theme_active(void);		/* 1 while a theme is loaded */
+/*
+ * Opcode 121: the menu-bar clock. The desktop formats the date and time
+ * to its own settings and hands the string over; the AES draws it
+ * right-aligned in the menu bar, whoever owns the bar, and repaints just
+ * that strip when the text changes. Returns 1 while a theme is loaded -
+ * the desktop then leaves its taskbar clock out; 0 = draw it yourself.
+ */
+#define APJ_MENUCLOCK_MAX	40
+short apj_menuclock_set(int lock, const char *s);
+const char *apj_menuclock_text(void);
+void apj_menu_clock(struct xa_vdi_settings *v, const GRECT *bar);	/* menuwidg.c calls it */
+
 short apj_list_fg(short pen);		/* scroll lists: a stock text pen -> the theme's */
 short apj_list_bg(short pen);		/*               a stock fill pen -> the theme's */
 short apj_theme_commit(void);		/* opcode 113: apply to the object theme */

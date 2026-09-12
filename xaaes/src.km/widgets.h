@@ -73,6 +73,7 @@ long	sl_to_pix(long s, long p);
 int	XA_slider(struct xa_window *w, int which, long total, long visible, long start);
 bool	m_inside(short x, short y, GRECT *o);
 void	redraw_menu(int lock);
+void	redraw_menu_clip(int lock, const GRECT *clip);	/* APJ-OS: part of the bar */
 void	done_widget_active(struct xa_window *wind, int i);
 bool iconify_action(int lock, struct xa_window *wind, const struct moose_data *md);
 

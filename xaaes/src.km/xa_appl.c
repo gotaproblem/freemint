@@ -1887,6 +1887,11 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 			apj_broadcast_skinchg(lock, client);
 			break;
 		}
+		case 121:						/* APJ menu-bar clock: addrin[0] -> text; 1 = drawn by the AES */
+		{
+			ret = apj_menuclock_set(lock, (const char *) pb->addrin[0]);
+			break;
+		}
 		case 116:						/* APJ dock: addrin[0] = 1 register / 0 leave */
 		{
 			ret = apj_dock_register(lock, client, (short) (long) pb->addrin[0]);

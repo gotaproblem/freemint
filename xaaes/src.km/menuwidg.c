@@ -2486,6 +2486,7 @@ Display_menu_widg(struct xa_window *wind, struct xa_widget *widg, const GRECT *c
 		draw_object_tree(0, wt, NULL, wind->vdi_settings, aesobj(wt->tree, 1), MAX_DEPTH, NULL, 0);
 		wt->rend_flags &= ~WTR_ROOTMENU;
 		(*wt->objcr_api->write_menu_line)(wind->vdi_settings, &widg->ar);	/* HR: not in standard menu's object tree */
+		apj_menu_clock(wind->vdi_settings, &widg->ar);	/* APJ-OS: opcode 121 */
 	}
 
 	wt->objcr_api = save_api;
