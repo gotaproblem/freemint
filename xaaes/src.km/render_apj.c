@@ -4776,6 +4776,47 @@ apj_theme_active(void)
 	return apj_active;
 }
 
+/*
+ * The scroll lists (file selector, task manager, about box) draw with
+ * pens written into their tables in 1999: black text on white paper,
+ * white on black when selected, blue for a directory. Under a dark
+ * theme that is blue on near-black. Rather than rewrite every table,
+ * the list drawer asks here for each pen it is about to use, and while
+ * a theme is loaded the stock meaning maps to the theme role: paper,
+ * text, selection, accent. Red for an executable is left alone - it
+ * reads on either ground. Stock pens come back unchanged with no theme.
+ */
+short
+apj_list_fg(short pen)
+{
+	if (!apj_active || MONO)
+		return pen;
+	switch (pen)
+	{
+		case G_BLACK:	return APJ_PEN(APJ_R_TEXT);
+		case G_WHITE:	return APJ_PEN(APJ_R_SELFG);	/* text of a selected row */
+		case G_BLUE:	return APJ_PEN(APJ_R_ACCENT);	/* directories */
+		case G_CYAN:	return APJ_PEN(APJ_R_SELFG);	/* a selected directory */
+		case G_LBLACK:	return APJ_PEN(APJ_R_DISABLED);	/* tree lines, dim text */
+		default:	return pen;
+	}
+}
+
+short
+apj_list_bg(short pen)
+{
+	if (!apj_active || MONO)
+		return pen;
+	switch (pen)
+	{
+		case G_WHITE:	return APJ_PEN(APJ_R_PAPER);
+		case G_BLACK:	return APJ_PEN(APJ_R_SELBG);	/* the selected row */
+		case G_LBLUE:	return APJ_PEN(APJ_R_SELBG);	/* task manager's accessories */
+		case G_LWHITE:	return APJ_PEN(APJ_R_PANEL);
+		default:	return pen;
+	}
+}
+
 /* opcode 115: hand the theme's role RGBs to a client, 0xRRGGBB each */
 short
 apj_theme_query(long *rgb)

@@ -41,6 +41,7 @@
 #include "obtree.h"
 #include "widgets.h"
 #include "xa_fsel.h"
+#include "render_apj.h"
 #include "xa_form.h"
 #include "c_window.h"
 #include "keycodes.h"
@@ -585,7 +586,7 @@ draw_nesticon(struct xa_vdi_settings *v, short width, GRECT *xy, SCROLL_ENTRY *t
 
 		x = xy->g_x + (width * (this->level - 1));
 
-		(*v->api->l_color)(v, G_LBLACK);
+		(*v->api->l_color)(v, apj_list_fg(G_LBLACK));
 		for (i = 0; i < this->level; i++)
 		{
 			if (root)
@@ -618,14 +619,14 @@ draw_nesticon(struct xa_vdi_settings *v, short width, GRECT *xy, SCROLL_ENTRY *t
 	if (this->down || (this->xstate & OS_NESTICON))
 	{
 		(*v->api->f_interior)(v, FIS_SOLID);
-		(*v->api->f_color)(v, G_WHITE);
+		(*v->api->f_color)(v, apj_list_bg(G_WHITE));
 		(*v->api->gbar)(v, 0, &r);
 
-		(*v->api->l_color)(v, G_BLACK);
+		(*v->api->l_color)(v, apj_list_fg(G_BLACK));
 		(*v->api->gbox)(v, 0, &r);
 		if (this->prev)
 		{
-			(*v->api->l_color)(v, G_LBLACK);
+			(*v->api->l_color)(v, apj_list_fg(G_LBLACK));
 			pnt[0] = x + x_center;
 			pnt[1] = xy->g_y;
 			pnt[2] = pnt[0];
@@ -641,7 +642,7 @@ draw_nesticon(struct xa_vdi_settings *v, short width, GRECT *xy, SCROLL_ENTRY *t
 			v_pline(v->handle, 2, pnt);
 		}
 
-		(*v->api->l_color)(v, G_BLACK);
+		(*v->api->l_color)(v, apj_list_fg(G_BLACK));
 		pnt[0] = r.g_x + 2;
 		pnt[1] = r.g_y + 4;
 		pnt[2] = pnt[0] + 4;
@@ -660,7 +661,7 @@ draw_nesticon(struct xa_vdi_settings *v, short width, GRECT *xy, SCROLL_ENTRY *t
 	}
 	else
 	{
-		(*v->api->l_color)(v, G_LBLACK);
+		(*v->api->l_color)(v, apj_list_fg(G_LBLACK));
 		if (this->prev || this->up)
 		{
 			pnt[0] = x + x_center;
@@ -706,7 +707,7 @@ display_list_element(int lock, SCROLL_INFO *list, SCROLL_ENTRY *this,
 		if( TOP != 2 || ssel != sel )
 		{
 			(*v->api->wr_mode)(v, MD_REPLACE);
-			(*v->api->f_color)(v, sel ? G_BLACK : G_WHITE);
+			(*v->api->f_color)(v, apj_list_bg(sel ? G_BLACK : G_WHITE));
 			(*v->api->f_interior)(v, FIS_SOLID);
 			ssel = sel;
 		}
@@ -955,7 +956,7 @@ display_list_element(int lock, SCROLL_INFO *list, SCROLL_ENTRY *this,
 
 							dy += ((this->r.g_h - th) >> 1);
 
-							(*v->api->t_color)(v, wtxt->fg);
+							(*v->api->t_color)(v, apj_list_fg(wtxt->fg));
 
 							if( list->flags & SIF_INLINE_EFFECTS )
 							{
@@ -1053,7 +1054,7 @@ display_list_element(int lock, SCROLL_INFO *list, SCROLL_ENTRY *this,
 									if (sel && (f & WTXT_ACT3D))
 										dx++, dy++;
 
-									(*v->api->t_color)(v, wtxt->bg);
+									(*v->api->t_color)(v, apj_list_bg(wtxt->bg));
 									dx++;
 									dy++;
 									v_gtext(v->handle, dx, dy, t);
@@ -1160,7 +1161,7 @@ draw_slist(int lock, SCROLL_INFO *list, SCROLL_ENTRY *entry, const GRECT *clip)
 		{
 			if (xy.g_h > 0)
 			{
-				(*v->api->f_color)(v, G_WHITE);
+				(*v->api->f_color)(v, apj_list_bg(G_WHITE));
 				(*v->api->bar)(v, 0, xy.g_x, xy.g_y, xy.g_w, xy.g_h);
 			}
 			list->flags &= ~SIF_DIRTY;

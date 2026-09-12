@@ -58,6 +58,8 @@ enum
 short apj_theme_set(long val);		/* opcode 111: (role<<24)|RGB; 1 ok, 0 bad */
 short apj_theme_reset(void);		/* opcode 112: back to the stock look */
 short apj_theme_active(void);		/* 1 while a theme is loaded */
+short apj_list_fg(short pen);		/* scroll lists: a stock text pen -> the theme's */
+short apj_list_bg(short pen);		/*               a stock fill pen -> the theme's */
 short apj_theme_commit(void);		/* opcode 113: apply to the object theme */
 short apj_theme_query(long *rgb);	/* opcode 115: APJ_R_N x 0xRRGGBB into rgb[]; 0 if no theme */
 
