@@ -698,6 +698,77 @@ find_menu(int lock, struct xa_client *client, short exclude)
 	return C.Aes;
 }
 
+/*
+ * Bespoke workspaces. Every window is tagged (wdesk, set in open_window)
+ * with the workspace current when it FIRST opened; -1 = sticky, visible
+ * everywhere. Switching hides the leavers through the very same
+ * hide_window() machinery user-hiding has always used, and unhides only
+ * what the switcher itself hid (XAWS_WSHIDDEN) - never a window the user
+ * or its app hid deliberately. System clients and clients that forbid
+ * hiding are left alone, as hide_app() has always done.
+ */
+
+short ws_current = 0;
+
+void
+ws_switch(int lock, short ws)
+{
+	struct xa_window *w, *nxt;
+	struct xa_client *front = NULL;
+
+	if (ws < 0 || ws > 3 || ws == ws_current)
+		return;
+
+	ws_current = ws;
+
+	/* Pass 1: visible windows (above root) leaving this desk.
+	 * ws_hide_window() restacks belowroot and repaints synchronously,
+	 * entirely kernel-side - a busy client cannot ignore it the way
+	 * it can ignore the cooperative WM_MOVED of hide_window(). */
+
+	w = window_list;
+	while (w && w != root_window)
+	{
+		nxt = w->next;
+
+		if (!w->nolist
+		    && w->wdesk >= 0
+		    && w->wdesk != ws
+		    && (w->window_status & XAWS_OPEN)
+		    && !is_hidden(w)
+		    && !(w->owner->type & APP_SYSTEM)
+		    && !(w->owner->swm_newmsg & NM_INHIBIT_HIDE))
+		{
+			ws_hide_window(lock, w);
+		}
+
+		w = nxt;
+	}
+
+	/* Pass 2: the arriving desk's windows sit BELOW the root window
+	 * in the list - the section pass 1 never reaches. */
+
+	w = root_window->next;
+	while (w)
+	{
+		nxt = w->next;
+
+		if ((w->window_status & XAWS_WSHIDDEN) && w->wdesk == ws)
+		{
+			ws_unhide_window(lock, w);
+
+			if (!front)
+				front = w->owner;
+		}
+
+		w = nxt;
+	}
+
+	if (front)
+		app_in_front(lock, front, true, true, true);
+}
+
+
 void
 unhide_app(int lock, struct xa_client *client)
 {

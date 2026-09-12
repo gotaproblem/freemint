@@ -48,6 +48,9 @@ void	free_attachments(struct xa_client *client);
 void	remove_attachments(int lock, struct xa_client *client, XA_TREE *wt);
 void	set_menu_widget(struct xa_window *wind, struct xa_client *owner, XA_TREE *menu);
 void	fix_menu(XA_TREE *root, struct xa_window *w);
+/* APJ-OS: root menu bar height for a system font cell of ch pixels
+ * (stock ch + 2; taller while the Fluent theme is live) */
+short	apj_menu_bar_height(short ch);
 
 Tab *	collapse(Tab *from, Tab *upto);
 bool	find_pop(short x, short y, Tab **ret);

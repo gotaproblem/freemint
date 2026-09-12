@@ -27,6 +27,7 @@
  */
 
 #include "c_mouse.h"
+#include "apj_dragstat.h"
 #include "xa_global.h"
 #include "xa_evnt.h"
 #include "app_man.h"
@@ -403,7 +404,10 @@ cXA_active_widget(int lock, struct c_event *ce, short cancel)
 		 */
 	}
 	if (C.move_block == 1)
+	{
+		apj_ds_unblock(1);
 		C.move_block = 0;
+	}
 }
 
 #if INCLUDE_UNUSED

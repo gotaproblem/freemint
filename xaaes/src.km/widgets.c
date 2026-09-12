@@ -306,6 +306,9 @@ cancel_widget_active(struct xa_window *wind, int i)
 	widget_active.widg = NULL;
 	widget_active.cont = false;
 
+	/* APJ-OS: redraw the rounded corners a live drag put off */
+	apj_corners_flush(0, wind);
+
 	/* Restore the mouse now we've finished the action */
 	xa_graf_mouse(wind->owner->mouse, wind->owner->mouse_form, wind->owner, false);
 }
@@ -742,6 +745,14 @@ free_wt(XA_TREE *wt)
 	{
 		DIAGS(("free_wt: Declared as static!"));
 		return;
+	}
+
+	/* APJ-OS: saved stock menu geometry (menuwidg.c) */
+	if (wt->apj_mgeom)
+	{
+		kfree(wt->apj_mgeom);
+		wt->apj_mgeom = NULL;
+		wt->apj_menu = 0;
 	}
 
 	if (wt->extra && (wt->flags & WTF_XTRA_ALLOC))
@@ -2937,6 +2948,9 @@ calc_work_area(struct xa_window *wind)
 	int t_margin, b_margin, l_margin, r_margin;
 	short wa_borders = 0;
 	bool shaded = wind->window_status & XAWS_SHADED;
+	/* APJ-OS: a Fluent window is one flat surface inside its border -
+	 * no work area frame line on the sides no widget covers */
+	bool waf = wind->wa_frame && !apj_window_fluent(wind) && !apj_bare_window(wind);
 
 	/* a colour work area frame is larger to allow for the
 	 * fancy borders :-) unless thinwork has been specified
@@ -2978,36 +2992,59 @@ calc_work_area(struct xa_window *wind)
 
 	rp_2_ap_row(wind);
 
-	if (wind->inner.g_y == wind->outer.g_y && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if (wind->inner.g_y == wind->outer.g_y && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_y += t_margin;
 		wind->wadelta.g_h += t_margin;
 		wa_borders |= WAB_TOP;
 	}
 
-	if (wind->inner.g_x == wind->outer.g_x && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if (wind->inner.g_x == wind->outer.g_x && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_x += l_margin;
 		wind->wadelta.g_w += l_margin;
 		wa_borders |= WAB_LEFT;
 	}
 
-	if ((wind->inner.g_y + wind->inner.g_h) == (wind->outer.g_y + wind->outer.g_h) && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if ((wind->inner.g_y + wind->inner.g_h) == (wind->outer.g_y + wind->outer.g_h) && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_h += b_margin;
 		wa_borders |= WAB_BOTTOM;
 	}
 
-	if ((wind->inner.g_x + wind->inner.g_w) == (wind->outer.g_x + wind->outer.g_w) && wind->frame >= 0 && wind->thinwork && wind->wa_frame)
+	if ((wind->inner.g_x + wind->inner.g_w) == (wind->outer.g_x + wind->outer.g_w) && wind->frame >= 0 && wind->thinwork && waf)
 	{
 		wind->wadelta.g_w += r_margin;
 		wa_borders |= WAB_RIGHT;
 	}
 
-	if (wind->frame >= 0 && !wind->thinwork)
+	/* the 2 px ring the stock 3D bevel needs - not on a Fluent window,
+	 * which draws no bevel (win_draw.c d_waframe) */
+	if (wind->frame >= 0 && !wind->thinwork && !apj_bare_window(wind) &&
+	    !apj_window_fluent(wind))
 	{
 		wind->wadelta.g_x += 2, wind->wadelta.g_y += 2;
 		wind->wadelta.g_w += 4, wind->wadelta.g_h += 4;
+	}
+
+	/*
+	 * APJ-OS: the bottom corners are only rounded over rows below the work
+	 * area (rectlist.c apj_corner_rows - carving into the work area would
+	 * split every program's redraw into three passes). The title bar gives
+	 * the top its full curve; a window with nothing along its bottom edge
+	 * had only the frame rows down there and came out square. Give such a
+	 * Fluent window a bottom border as deep as the radius, painted in the
+	 * border colour by d_borders(). Windows with a slider or info line at
+	 * the bottom already have the room.
+	 */
+	if (wind->frame >= 0 && apj_window_fluent(wind) && !apj_bare_window(wind) &&
+	    (wind->inner.g_y + wind->inner.g_h) == (wind->outer.g_y + wind->outer.g_h))
+	{
+		short want = apj_round_radius();
+		short have = (wind->frame > 0 ? wind->frame : 0) + wind->y_shadow;
+
+		if (want > have)
+			wind->wadelta.g_h += want - have;
 	}
 
 	wind->wa_borders = wa_borders;
@@ -3978,6 +4015,17 @@ standard_widgets(struct xa_window *wind, XA_WIND_ATTR tp, bool keep_stuff)
 		}
 	}
 	{
+		/* APJ-OS: a Fluent layout has no scrollbar arrows in its rows.
+		 * A widget that is in no row is never touched below, so one
+		 * installed by an earlier (stock) layout of this window would
+		 * stay active at a stale position - clear them first. */
+		static const short arrows[] = { XAW_UPLN, XAW_UPLN1, XAW_DNLN, XAW_LFLN, XAW_LFLN1, XAW_RTLN };
+		int i;
+
+		for (i = 0; i < 6; i++)
+			wind->widgets[arrows[i]].m.properties &= ~(WIP_INSTALLED|WIP_ACTIVE);
+	}
+	{
 		struct nwidget_row *rows = theme->layout;
 		XA_WIND_ATTR rtp, this_tp, *tp_deps;
 		struct xa_widget *widg;
@@ -4118,6 +4166,13 @@ standard_widgets(struct xa_window *wind, XA_WIND_ATTR tp, bool keep_stuff)
 			rows++;
 		}
 	}
+	/* APJ-OS: a Fluent layout installs no arrow widgets, but the arrow
+	 * bits stay in active_widgets so a click on the scrollbar track still
+	 * pages (is_V_arrow / is_H_arrow test the bits, not the widgets) */
+	if (!(wind->widgets[XAW_UPLN].m.properties & WIP_INSTALLED))
+		utp |= tp & (UPARROW|DNARROW|UPARROW1);
+	if (!(wind->widgets[XAW_LFLN].m.properties & WIP_INSTALLED))
+		utp |= tp & (LFARROW|RTARROW|LFARROW1);
 	tp &= ~THEME_WIDGETS;
 	utp &= THEME_WIDGETS;
 	wind->active_widgets = (tp | utp);

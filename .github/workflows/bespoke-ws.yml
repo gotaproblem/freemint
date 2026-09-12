@@ -1,0 +1,62 @@
+# Bespoke workspaces build - fork-friendly: no SSH deploy secrets needed.
+# Builds the full 02060 target (kernel + XaAES for 68020-68060, which
+# covers the PiStorm 68040) and uploads every built .km kernel module as
+# an artifact - xaaes.km among them, ready to copy to the mint sysdir.
+name: Bespoke workspaces build
+
+on:
+  push:
+    branches: [ bespoke-ws ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      CPU_TARGET: "02060"
+      CROSS_TOOL: m68k-atari-mint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: ./.scripts/setup_env.sh
+
+      - name: Install packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SYSROOT_DIR="/" ./.scripts/install-freemint.sh binutils gcc mintbin
+          ./.scripts/install-freemint.sh mintlib fdlibm gemlib cflib gemma
+          ./.scripts/install-hcp.sh
+          ./.scripts/install-udo.sh
+          ./.scripts/install-dosfstools.sh
+
+      - name: Install Applications
+        run: ./.scripts/install-apps.sh
+
+      - name: libcmini
+        run: ./.scripts/install-libcmini.sh
+
+      - name: Build
+        run: |
+          ./.scripts/before_script.sh
+          # Bespoke: ALSO build the true 68040 XaAES (xaaes040.km,
+          # -m68040 code generation) alongside the stock 020-60 one.
+          # Appended AFTER before_script.sh because that script pins
+          # xaaestargets to CPU_TARGET; the last assignment wins.
+          echo "xaaestargets = 02060 040" >> ./xaaes/src.km/XAAESDEFS
+          ./.scripts/build.sh
+
+      - name: Collect kernel modules
+        run: |
+          mkdir -p /tmp/bespoke-ws
+          find . -name "xaaes*.km" -exec cp -v {} /tmp/bespoke-ws/ \;
+          find . -name "*.km" | head -20
+
+      - name: Upload xaaes.km
+        uses: actions/upload-artifact@v4
+        with:
+          name: bespoke-ws-xaaes
+          path: /tmp/bespoke-ws
+          if-no-files-found: error
+          retention-days: 30

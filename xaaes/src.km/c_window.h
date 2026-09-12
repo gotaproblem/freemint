@@ -112,6 +112,36 @@ void	unhide_window(int lock, struct xa_window *wind, bool check);
 void	hide_toolboxwindows(struct xa_client *client);
 void	show_toolboxwindows(struct xa_client *client);
 
+/* Bespoke workspaces: kernel-side, client-independent hide/show */
+void	ws_hide_window(int lock, struct xa_window *wind);
+void	ws_unhide_window(int lock, struct xa_window *wind);
+
+/* Bespoke live UI config (settings-page opcodes 106/107) */
+short	ws_cfg_get(short id);
+short	ws_cfg_apply(int lock, short id, short val);
+short	ws_gem_pen(long val);
+short	ws_gem_reset(void);
+short	ws_pens_themed(void);	/* GEM pens remapped to a theme? */
+void	apj_chrome_apply(int lock, struct xa_client *client, short on);
+void	apj_menu_relayout(int lock);
+void	apj_flush_wc_caches(void);
+void	apj_corners_flush(int lock, struct xa_window *wind);	/* corners deferred during a live drag */
+short	apj_bare_window(struct xa_window *wind);	/* a bar or panel: no work-area frame */
+
+/* APJ-OS taskbar dock (appl_control 116-119): minimised windows leave the
+ * screen and are listed for the dock instead of the icon grid */
+struct apj_dockent
+{
+	short handle;			/* in: [0].handle = entries the buffer holds */
+	short apid;			/* owner */
+	char title[32];
+};
+short	apj_dock_register(int lock, struct xa_client *client, short on);
+short	apj_dock_list(struct apj_dockent *e);
+short	apj_dock_restore(int lock, struct xa_window *w);
+short	apj_dock_restore_app(int lock, short apid);
+void	apj_dock_client_exit(int lock, struct xa_client *client);
+
 void	clear_wind_handles(void);
 //void	clear_wind_rectlist(struct xa_window *wind);
 

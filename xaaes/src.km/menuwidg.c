@@ -24,6 +24,7 @@
 
 #include "xaaes.h"
 #include "menuwidg.h"
+#include "render_apj.h"
 #include "xa_global.h"
 
 #include "about.h"
@@ -102,6 +103,28 @@ menu_spec(OBJECT *obtree, int item)
 	}
 }
 
+/*
+ * APJ-OS: menus are system chrome whoever owns the tree. While the
+ * desktop's theme is live they draw with the APJ renderer (AESSYS is on
+ * it whenever the theme is), otherwise with the owner's. Called before
+ * every menu draw so a theme switch takes effect at once and a legacy
+ * app's menu never flips the bar back to the old look.
+ */
+static void
+apj_menu_objcr(XA_TREE *wt)
+{
+	if (client_apj_chrome(C.Aes) && C.Aes->objcr_api && C.Aes->objcr_theme)
+	{
+		wt->objcr_api = C.Aes->objcr_api;
+		wt->objcr_theme = C.Aes->objcr_theme;
+	}
+	else if (wt->owner)
+	{
+		wt->objcr_api = wt->owner->objcr_api;
+		wt->objcr_theme = wt->owner->objcr_theme;
+	}
+}
+
 static void
 change_title(Tab *tab, int state)
 {
@@ -117,6 +140,7 @@ change_title(Tab *tab, int state)
 
 	obtree->ob_x = k->rdx;
 	obtree->ob_y = k->rdy;
+	apj_menu_objcr(wt);
 	wt->rend_flags |= WTR_ROOTMENU;
 	obj_change(wt,
 		   C.Aes->vdi_settings,
@@ -150,6 +174,7 @@ change_entry(Tab *tab, int state)
 
 	obtree->ob_x = k->pdx;
 	obtree->ob_y = k->pdy;
+	apj_menu_objcr(wt);
 
 	if (k->p.wind)
 	{
@@ -184,6 +209,7 @@ redraw_entry(Tab *tab, short t)
 
 	obtree->ob_x = k->pdx;
 	obtree->ob_y = k->pdy;
+	apj_menu_objcr(wt);
 
 	if (k->p.wind)
 	{
@@ -603,6 +629,243 @@ static struct appmenu *appmenu = NULL;
 static OBJECT *appmenu_ob;
 static size_t appmenusize = 0;
 
+/*
+ * ---------------------------------------------------------------------
+ * APJ-OS Fluent menu geometry (phase 2)
+ *
+ * While the desktop's theme is live the root menu bar is re-laid-out:
+ * the bar is half a cell taller, titles get extra padding and sit from a
+ * small left margin, and each plain drop-down gets taller rows, thin
+ * separators and an inner margin, and opens under its own title.
+ *
+ * Only geometry changes here; render_apj draws the new look for a tree
+ * flagged apj_menu. Everything is derived from the system font cell, so
+ * 8x16 at 640x480 scales down with it (24px cell: bar 36, rows 34).
+ *
+ * The stock geometry of the whole tree is saved first and put back
+ * before fix_menu() does its stock fixes, so theme off (112), a new
+ * install of the same tree and a bar height change all start clean.
+ * A drop-down that is not a plain list of one-cell G_STRINGs stacked
+ * from y = 0 keeps its stock layout (its title is still padded).
+ * ---------------------------------------------------------------------
+ */
+
+struct apj_menu_metrics
+{
+	short bar;		/* bar height */
+	short lead;		/* left margin before the first title */
+	short tpad;		/* extra padding each side of a title */
+	short row;		/* drop-down row */
+	short sep;		/* drop-down separator row */
+	short bpad;		/* drop-down inner margin */
+	short rpad;		/* room after a row's text (shortcut) */
+};
+
+struct apj_mgeom
+{
+	short n;
+	short g[1];		/* n x {x, y, w, h} */
+};
+
+#define APJ_MENU_MAXOBS	1024
+
+static bool
+apj_menu_fluent(void)
+{
+	return !MONO && cfg.menu_layout == 0 && client_apj_chrome(C.Aes);
+}
+
+static void
+apj_menu_metrics(struct apj_menu_metrics *m, short ch)
+{
+	m->bar  = ch + ch / 2;
+	m->lead = ch / 3;
+	m->tpad = ch / 6;
+	m->row  = ch + (ch * 5) / 12;
+	m->sep  = ch / 2;
+	m->bpad = ch / 4;
+	m->rpad = screen.c_max_w;
+}
+
+/* Height of the root menu bar for a system font cell of ch pixels */
+short
+apj_menu_bar_height(short ch)
+{
+	struct apj_menu_metrics m;
+
+	if (!apj_menu_fluent())
+		return ch + 2;
+	apj_menu_metrics(&m, ch);
+	return m.bar;
+}
+
+static short
+apj_menu_count(OBJECT *t)
+{
+	short n = 0;
+
+	while (n < APJ_MENU_MAXOBS)
+	{
+		if (t[n++].ob_flags & OF_LASTOB)
+			return n;
+	}
+	return 0;		/* no LASTOB in reach: leave the tree alone */
+}
+
+static void
+apj_menu_restore(XA_TREE *wt)
+{
+	struct apj_mgeom *g = wt->apj_mgeom;
+
+	if (g)
+	{
+		OBJECT *t = wt->tree;
+		short i;
+
+		if (t)
+		{
+			for (i = 0; i < g->n; i++)
+			{
+				t[i].ob_x      = g->g[i * 4];
+				t[i].ob_y      = g->g[i * 4 + 1];
+				t[i].ob_width  = g->g[i * 4 + 2];
+				t[i].ob_height = g->g[i * 4 + 3];
+			}
+		}
+		kfree(g);
+		wt->apj_mgeom = NULL;
+	}
+	wt->apj_menu = 0;
+}
+
+static bool
+apj_menu_is_separator(OBJECT *o)
+{
+	char *s;
+
+	if (!(o->ob_state & OS_DISABLED))
+		return false;
+	s = object_get_spec(o)->free_string;
+	if (!s || *s != '-')
+		return false;
+	while (*s == '-')
+		s++;
+	return *s == '\0';
+}
+
+/*
+ * A drop-down box: taller rows, thin separators, inner margin. Returns
+ * false (tree untouched) unless it is a plain one-cell G_STRING list.
+ */
+static bool
+apj_menu_dropdown(OBJECT *t, short box, const struct apj_menu_metrics *m)
+{
+	short c, y, ch, w, guard;
+
+	c = t[box].ob_head;
+	if (c < 0)
+		return false;
+	ch = t[c].ob_height;
+	if (ch <= 0)
+		return false;
+
+	for (y = 0, guard = 0; c != box; c = t[c].ob_next)
+	{
+		if (c < 0 || ++guard > APJ_MENU_MAXOBS)
+			return false;
+		if ((t[c].ob_type & 0xff) != G_STRING || t[c].ob_head != -1
+		    || t[c].ob_x != 0 || t[c].ob_y != y || t[c].ob_height != ch)
+			return false;
+		y += ch;
+	}
+
+	w = t[box].ob_width + m->rpad;
+	y = m->bpad;
+	for (c = t[box].ob_head; c != box; c = t[c].ob_next)
+	{
+		OBJECT *o = t + c;
+
+		o->ob_x = m->bpad;
+		o->ob_y = y;
+		o->ob_width = w;
+		o->ob_height = apj_menu_is_separator(o) ? m->sep : m->row;
+		y += o->ob_height;
+	}
+	t[box].ob_width = w + 2 * m->bpad;
+	t[box].ob_height = y + m->bpad;
+	return true;
+}
+
+static void
+apj_menu_transform(XA_TREE *wt)
+{
+	OBJECT *t = wt->tree;
+	struct apj_menu_metrics m;
+	struct apj_mgeom *g;
+	short n, i, tbar, titles, menus, t_ob, s_ob, x, guard;
+
+	if (!t || (n = apj_menu_count(t)) < 4)
+		return;
+	g = kmalloc(sizeof(short) * (1 + 4L * n));
+	if (!g)
+		return;
+	g->n = n;
+	for (i = 0; i < n; i++)
+	{
+		g->g[i * 4]     = t[i].ob_x;
+		g->g[i * 4 + 1] = t[i].ob_y;
+		g->g[i * 4 + 2] = t[i].ob_width;
+		g->g[i * 4 + 3] = t[i].ob_height;
+	}
+
+	tbar = t[0].ob_head;
+	titles = tbar > 0 ? t[tbar].ob_head : -1;
+	menus = t[0].ob_tail;
+	if (tbar <= 0 || titles <= 0 || menus <= 0 || titles >= n || menus >= n)
+	{
+		kfree(g);
+		return;
+	}
+	wt->apj_mgeom = g;
+	wt->apj_menu = 1;
+
+	apj_menu_metrics(&m, screen.c_max_h);
+
+	/* titles: contiguous from a small margin, each padded both sides.
+	 * Title objects keep the full bar height so the whole bar tracks;
+	 * the renderer draws the open title as an inset pill. */
+	t[titles].ob_x = m.lead;
+	x = 0;
+	t_ob = t[titles].ob_head;
+	s_ob = t[menus].ob_head;
+	for (guard = 0; t_ob > 0 && t_ob != titles && s_ob > 0 && s_ob != menus; guard++)
+	{
+		OBJECT *to = t + t_ob;
+		OBJECT *so = t + s_ob;
+
+		if (guard > APJ_MENU_MAXOBS)
+			break;
+
+		to->ob_x = x;
+		to->ob_width += 2 * m.tpad;
+
+		/* drop-down under its own title, kept on the screen */
+		apj_menu_dropdown(t, s_ob, &m);
+		so->ob_x = t[titles].ob_x + x;
+		if (so->ob_x + so->ob_width > t[menus].ob_width - 2)
+			so->ob_x = t[menus].ob_width - 2 - so->ob_width;
+		if (so->ob_x < 0)
+			so->ob_x = 0;
+
+		x += to->ob_width;
+		t_ob = to->ob_next;
+		s_ob = so->ob_next;
+	}
+	t[titles].ob_width = x;
+
+	wt_menu_area(wt);
+}
+
 static const OBJECT drop_box =
 {
 	-1, 1, 2,			/* Object 0  */
@@ -872,6 +1135,17 @@ built_desk_popup(int lock, short x, short y)
 	ob[0].ob_y = y;
 
 	menu_spec(ob, 0);
+
+	/* APJ-OS: the desk drop-down is rebuilt on every open - lay it out
+	 * like the other Fluent drop-downs (flag goes on desk_wt in
+	 * menu_title) */
+	if (apj_menu_fluent())
+	{
+		struct apj_menu_metrics m;
+
+		apj_menu_metrics(&m, screen.c_max_h);
+		apj_menu_dropdown(ob, 0, &m);
+	}
 
 	DIAGS(("built_desk_popup: return %lx", (unsigned long)appmenu_ob));
 	return appmenu_ob;
@@ -1179,8 +1453,9 @@ display_popup(Tab *tab, short rdx, short rdy)
 	struct xa_window *wind;
 	XA_WIND_ATTR tp = TOOLBAR;
 	GRECT r;
-	bool mod_h = false;
+	bool mod_h = false, fluent_drop;
 	int mg = MONO ? 0 : 0;
+	short rowh = screen.c_max_h;
 
 	wt->dx = 0;
 	wt->dy = 0;
@@ -1189,19 +1464,27 @@ display_popup(Tab *tab, short rdx, short rdy)
 	obtree->ob_y = k->rdy = rdy;
 
 	obj_rectangle(wt, aesobj(wt->tree, pi->parent), &r);
+	/* APJ-OS: scroll limits count rows, and Fluent rows are taller */
+	if (wt->apj_menu)
+	{
+		struct apj_menu_metrics m;
+
+		apj_menu_metrics(&m, screen.c_max_h);
+		rowh = m.row;
+	}
 /* ************ */
 	if (tab->scroll)
 	{
-		if (r.g_h > (tab->scroll/*8*/ * screen.c_max_h))
+		if (r.g_h > (tab->scroll/*8*/ * rowh))
 		{
 			mod_h = true;
-			r.g_h = tab->scroll/*8*/ * screen.c_max_h;
+			r.g_h = tab->scroll/*8*/ * rowh;
 		}
 	}
-	if (cfg.popscroll && r.g_h > cfg.popscroll * screen.c_max_h)
+	if (cfg.popscroll && r.g_h > cfg.popscroll * rowh)
 	{
 		mod_h = true;
-		r.g_h = cfg.popscroll * screen.c_max_h;
+		r.g_h = cfg.popscroll * rowh;
 	}
 
 /* ************ */
@@ -1248,6 +1531,14 @@ display_popup(Tab *tab, short rdx, short rdy)
 	}
 
 	r = popup_inside(tab, r);
+
+	/* APJ-OS Fluent drop-down: the window is exactly the rounded panel -
+	 * the popup theme's canvas rim, work-area frame and shadow around it
+	 * squared off the corners. r becomes the panel (the stock work area) */
+	fluent_drop = (wt->apj_menu && !MONO && !mod_h);
+	if (fluent_drop)
+		r = calc_window(tab->lock, tab->client, WC_WORK, tp, created_for_AES|created_for_POPUP, mg, true, &r);
+
 	obtree->ob_x = k->pdx;
 	obtree->ob_y = k->pdy;
 
@@ -1265,6 +1556,17 @@ display_popup(Tab *tab, short rdx, short rdy)
 	if (wind)
 	{
 		GRECT or;
+
+		if (fluent_drop)
+		{
+			/* no popup canvas (the 3D black/white/grey rim of the popup
+			 * widget theme), border offsets, work-area frame or shadow */
+			wind->draw_canvas = NULL;
+			wind->bd = wind->rbd = (GRECT){0, 0, 0, 0};
+			wind->wa_frame = false;
+			wind->x_shadow = wind->y_shadow = 0;
+			calc_work_area(wind);
+		}
 		obj_rectangle(wt, aesobj(wt->tree, pi->parent), &or);
 		k->drop = wind->wa;
 
@@ -2144,10 +2446,19 @@ Display_menu_widg(struct xa_window *wind, struct xa_widget *widg, const GRECT *c
 {
 	XA_TREE *wt = widg->stuff.wt;
 	OBJECT *obtree;
+	struct object_render_api *save_api = wt->objcr_api;
+	void *save_theme = wt->objcr_theme;
 
 	assert(wt);
 	obtree = rp_2_ap(wind, widg, &widg->ar);
 	assert(obtree);
+
+	/* APJ-OS: the menu bar and its drop-downs are system chrome, whoever
+	 * owns the tree. While the desktop's theme is live they are drawn
+	 * with the APJ renderer even for a legacy client - same objects, same
+	 * layout, only the look - so the bar does not flip style with the
+	 * top application. AESSYS is on render_apj whenever the theme is. */
+	apj_menu_objcr(wt);
 
 	if (wind->dial & created_for_POPUP)
 	{
@@ -2176,6 +2487,9 @@ Display_menu_widg(struct xa_window *wind, struct xa_widget *widg, const GRECT *c
 		wt->rend_flags &= ~WTR_ROOTMENU;
 		(*wt->objcr_api->write_menu_line)(wind->vdi_settings, &widg->ar);	/* HR: not in standard menu's object tree */
 	}
+
+	wt->objcr_api = save_api;
+	wt->objcr_theme = save_theme;
 }
 
 static void
@@ -2409,6 +2723,7 @@ menu_title(int lock, Tab *tab, short title, struct xa_window *wind, XA_WIDGET *w
 		{
 			desk_wt.tree = built_desk_popup(tab->lock, 24, 24);
 			desk_wt.owner = C.Aes;
+			desk_wt.apj_menu = apj_menu_fluent() ? 1 : 0;
 			clear_edit(&desk_wt.e);
 			clear_focus(&desk_wt);
 
@@ -2534,8 +2849,11 @@ set_popup_widget(Tab *tab, struct xa_window *wind, int obj)
 	wt->widg = widg;
 	wt->links++;
 	wt->zen = true;
+	/* APJ-OS: drop-downs and popups are system chrome too - see
+	 * Display_menu_widg() */
 	wt->objcr_api = tab->client->objcr_api;
 	wt->objcr_theme = tab->client->objcr_theme;
+	apj_menu_objcr(wt);
 
 	if (frame < 0)
 		frame = 0;
@@ -2576,6 +2894,7 @@ set_popup_widget(Tab *tab, struct xa_window *wind, int obj)
  *          incompatabilities.
  */
 
+
 void
 fix_menu(XA_TREE *menu, struct xa_window *wind)
 {
@@ -2584,6 +2903,9 @@ fix_menu(XA_TREE *menu, struct xa_window *wind)
 	OBJECT *root = menu->tree;
 
 	DIAG((D_menu, NULL, "fixing menu 0x%lx", (unsigned long)root));
+
+	/* APJ-OS: back to the stock geometry before the stock fixes */
+	apj_menu_restore(menu);
 
 	tbar = root[0].ob_head;
 	titles = root[tbar].ob_head;
@@ -2614,6 +2936,11 @@ fix_menu(XA_TREE *menu, struct xa_window *wind)
 		t_ob = root[t_ob].ob_next;
 		s_ob = root[s_ob].ob_next;
 	}
+
+	/* APJ-OS: Fluent geometry for the root menu bar only (window menus
+	 * and the file selector's keep the stock layout) */
+	if ((!wind || wind == root_window) && apj_menu_fluent())
+		apj_menu_transform(menu);
 
 	DIAG((D_menu, NULL, "done fix_menu()"));
 }

@@ -35,6 +35,7 @@
 #include "messages.h"
 #include "menuwidg.h"
 #include "draw_obj.h"
+#include "render_apj.h"
 #include "sys_proc.h"
 #include "taskman.h"
 #include "util.h"
@@ -672,6 +673,9 @@ exit_client(int lock, struct xa_client *client, int code, bool pexit, bool detac
 	 * Clear if client was exclusively waiting for mouse input
 	 */
 	client->status |= CS_EXITING;
+
+	/* APJ-OS: the taskbar dock leaving - minimised windows back to the grid */
+	apj_dock_client_exit(lock, client);
 
 	if (client != C.Hlp) {
 		cancel_winctxt_popup(lock, NULL, client);
@@ -1669,6 +1673,32 @@ XA_appl_find(int lock, struct xa_client *client, AESPB *pb)
 }
 
 /*
+ * Tell every client the theme changed. A client that draws its own window -
+ * MP3GEM, VIDGEM, PSMON - loaded the nineteen role colours into its own
+ * workstation once, in apj_init(), and has no other way to learn they moved;
+ * the APJSKIN engine also reloads its sheet on this. Sent on both the
+ * commit (113) and the reset (112).
+ */
+static void
+apj_broadcast_skinchg(int lock, struct xa_client *from)
+{
+	struct xa_client *cl;
+	union msg_buf m;
+
+	bzero(&m, sizeof(m));
+	m.m[0] = APJ_SKINCHG;
+	m.m[1] = C.Aes ? C.Aes->p->pid : 0;
+
+	Sema_Up(LOCK_CLIENTS);
+	FOREACH_CLIENT(cl)
+	{
+		if (is_client(cl) && cl != from)
+			send_a_message(lock, cl, AMQ_NORM, QMF_CHKDUP, &m);
+	}
+	Sema_Dn(LOCK_CLIENTS);
+}
+
+/*
  * Extended XaAES calls
  */
 unsigned long
@@ -1758,6 +1788,158 @@ XA_appl_control(int lock, struct xa_client *client, AESPB *pb)
 				ret = 0;
 			break;
 		}
+
+		/* Bespoke workspaces - private extension used by the Bespoke
+		 * Desktop (TeraDesk fork). Opcodes chosen well clear of the
+		 * MagiC APC_ range; a stock desktop never sends them and a
+		 * stock XaAES answers 0 (unknown), so both directions degrade
+		 * gracefully. addrin[0] carries the argument. */
+
+		case 100:						/* switch to workspace 0-3 */
+		{
+			ws_switch(lock, (short) pb->addrin[0]);
+			break;
+		}
+		case 101:						/* query current workspace */
+		{
+			ret = ws_current + 1;		/* 1-4; 0 would read as failure */
+			break;
+		}
+		case 103:						/* make own window (handle) sticky */
+		{
+			struct xa_window *w =
+				get_wind_by_handle(lock, (short) pb->addrin[0]);
+
+			if (w && w->owner == client)
+				w->wdesk = -1;
+			else
+				ret = 0;
+			break;
+		}
+		case 104:						/* open the XaAES task manager */
+		{
+			/* same path the Ctrl+Alt+L hotkey takes (k_keybd.c) */
+			if (!C.update_lock)
+				post_cevent(C.Hlp, ceExecfunc, open_taskmanager, NULL, 1, 0, NULL, NULL);
+			else
+				ret = 0;
+			break;
+		}
+		case 105:						/* recover a hung GUI (= Ctrl+Alt+R) */
+		{
+			recover();
+			break;
+		}
+		case 106:						/* live-config GET: addrin[0] = id */
+		{
+			ret = ws_cfg_get((short) pb->addrin[0]);
+			break;
+		}
+		case 107:						/* live-config SET: addrin[0] = (id<<16)|val */
+		{
+			long a = (long) pb->addrin[0];
+
+			ret = ws_cfg_apply(lock, (short) (a >> 16), (short) (a & 0xFFFF));
+			break;
+		}
+		case 108:						/* theme GEM pen: addrin[0] = 0xPPRRGGBB */
+		{
+			ret = ws_gem_pen((long) pb->addrin[0]);
+			break;
+		}
+		case 109:						/* restore all themed GEM pens */
+		{
+			ret = ws_gem_reset();
+			break;
+		}
+		case 110:						/* draw this client with the APJ-OS renderer */
+		{
+			/* Self only, deliberately: switching a renderer tears down the
+			 * client's object api and theme (they belong to the old module)
+			 * and rebuilds them from the new one, so it is not something one
+			 * app should be able to do to another. Call it at startup, before
+			 * opening windows - already-drawn objects are not repainted here.
+			 *
+			 * Returns 0 if the APJ module is unavailable, in which case the
+			 * client stays on the stock renderer and should theme itself the
+			 * legacy way (opcodes 108/109). */
+			if (client_use_apj_render(client) != E_OK)
+				ret = 0;
+			break;
+		}
+		case 111:						/* APJ theme role: addrin[0] = (role<<24)|RRGGBB */
+		{
+			ret = apj_theme_set((long) pb->addrin[0]);
+			break;
+		}
+		case 112:						/* APJ theme off: render_apj draws the stock look */
+		{
+			ret = apj_theme_reset();
+			apj_chrome_apply(lock, client, 0);
+			/* the system UI follows the desktop back to the stock look */
+			sys_client_apj_render(C.Aes, 0);
+			sys_client_apj_render(C.Hlp, 0);
+			apj_chrome_apply(lock, C.Aes, 0);
+			apj_chrome_apply(lock, C.Hlp, 0);
+			/* menu bar back to stock height and layout */
+			apj_menu_relayout(lock);
+			apj_flush_wc_caches();
+			apj_broadcast_skinchg(lock, client);
+			break;
+		}
+		case 116:						/* APJ dock: addrin[0] = 1 register / 0 leave */
+		{
+			ret = apj_dock_register(lock, client, (short) (long) pb->addrin[0]);
+			break;
+		}
+		case 117:						/* APJ dock: addrin[0] -> struct apj_dockent[] */
+		{
+			ret = apj_dock_list((struct apj_dockent *) pb->addrin[0]);
+			break;
+		}
+		case 118:						/* APJ dock: restore window, addrin[0] = handle */
+		{
+			ret = apj_dock_restore(lock, get_wind_by_handle(lock, (short) (long) pb->addrin[0]));
+			break;
+		}
+		case 119:						/* APJ dock: restore an app's windows, addrin[0] = apid */
+		{
+			ret = apj_dock_restore_app(lock, (short) (long) pb->addrin[0]);
+			break;
+		}
+		case 115:						/* APJ theme query: addrin[0] -> long[APJ_R_N] */
+		{
+			ret = apj_theme_query((long *) pb->addrin[0]);
+			break;
+		}
+		case 114:						/* APJ AA text: addrin[0] -> struct apj_textreq */
+		{
+			ret = apj_text_request(client, (struct apj_textreq *) pb->addrin[0]);
+			break;
+		}
+		case 113:						/* APJ theme committed: reskin this client's windows */
+		{
+			if (client_apj_chrome(client))
+			{
+				apj_theme_commit();
+				apj_chrome_apply(lock, client, 1);
+				/* and the system UI - file selector, task manager,
+				 * alerts - drawn by the AES's own clients */
+				if (sys_client_apj_render(C.Aes, 1) == E_OK)
+					apj_chrome_apply(lock, C.Aes, 1);
+				if (sys_client_apj_render(C.Hlp, 1) == E_OK)
+					apj_chrome_apply(lock, C.Hlp, 1);
+				/* Fluent menu bar and drop-downs (phase 2) */
+				apj_menu_relayout(lock);
+				apj_flush_wc_caches();
+				/* self-drawing clients reload their pens and their skin */
+				apj_broadcast_skinchg(lock, client);
+			}
+			else
+				ret = 0;
+			break;
+		}
+
 		case APC_INFO:
 		{
 			if (cl)

@@ -33,6 +33,23 @@
 
 bool is_inside(const GRECT *r, const GRECT *o);
 
+/*
+ * APJ-OS Fluent rounded window corners (phase 5). A rounded window's
+ * shape is carved into the rectangle lists: windows above occlude with
+ * their rounded shape (a few row strips + the body), a window's own list
+ * leaves out its corner steps, so corner pixels belong to - and are drawn
+ * by - whatever lies beneath. No compositing, no stale pixels.
+ */
+#define APJ_SHAPE_MAX	40		/* >= 4 x steps (radius <= 8) + body */
+
+struct xa_window;
+short apj_corner_steps(struct xa_window *wind, const short **inset);	/* rows carved per corner, 0 = square */
+short apj_round_steps(short r, const short **inset);		/* inset table for radius r */
+short apj_round_radius(void);					/* Fluent radius at this screen size */
+short apj_corner_rows(struct xa_window *wind, const short **inset, short *nt, short *nb); /* carved rows top/bottom */
+short apj_shape_rects(struct xa_window *wind, GRECT *out);		/* rounded shape as rects; 0 = square */
+short apj_corner_boxes(struct xa_window *wind, GRECT *out);		/* 4 corner bounding boxes; 0 = square */
+
 struct build_rl_parms;
 struct build_rl_parms
 {
@@ -41,6 +58,10 @@ struct build_rl_parms
 	GRECT	*next_r;
 
 	void *ptr1;
+
+	/* APJ-OS: occluder rects still to hand out before the next window */
+	short	nshape, ishape;
+	GRECT	shape[APJ_SHAPE_MAX];
 };
 
 // bool was_visible(struct xa_window *w);

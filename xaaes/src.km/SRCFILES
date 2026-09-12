@@ -10,6 +10,7 @@ HEADER = \
 	c_keybd.h \
 	c_mouse.h \
 	c_window.h \
+	apj_dragstat.h \
 	xacookie.h \
 	cnf_xaaes.h \
 	debug.h \
@@ -32,6 +33,8 @@ HEADER = \
 	ob_inlines.h \
 	obtree.h \
 	rectlist.h \
+	apj_atlas.h \
+	render_apj.h \
 	render_obj.h \
 	scrlobjc.h \
 	semaphores.h \
@@ -78,6 +81,7 @@ COBJS = \
 	c_keybd.c \
 	c_mouse.c \
 	c_window.c \
+	apj_dragstat.c \
 	xacookie.c \
 	debug.c \
 	desktop.c \
@@ -98,6 +102,7 @@ COBJS = \
 	nkcc.c \
 	obtree.c \
 	rectlist.c \
+	render_apj.c \
 	render_obj.c \
 	scrlobjc.c \
 	semaphores.c \

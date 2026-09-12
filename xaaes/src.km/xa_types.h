@@ -100,6 +100,8 @@ typedef enum xa_window_class WINDOW_CLASS;
 #define XAWS_FIRST			0x00004000UL
 #define XAWS_RESIZED		0x00008000UL		/* if WM_SIZED to XaAES-(list-)window, evaluate in draw_object_tree() */
 #define XAWS_RM_WDG			0x00010000UL
+#define XAWS_WSHIDDEN		0x00020000UL	/* hidden by a workspace switch (Bespoke) */
+#define XAWS_DOCKED		0x00040000UL	/* minimised to the APJ-OS taskbar dock */
 #define XAWS_SEMA			0x80000000UL
 typedef unsigned long WINDOW_STATUS;
 
@@ -938,6 +940,14 @@ struct widget_tree
 					 * or anything the like ;-) */
 	void *extra;			/* Extra info if needed (texts for alert) */
 	struct xa_lbox_info *lbox;
+
+	/* APJ-OS Fluent menus (menuwidg.c). apj_menu = 1 while the tree has
+	 * the Fluent menu geometry, so render_apj draws pills, rows and
+	 * separators for it; apj_mgeom = the stock geometry it replaced
+	 * (kmalloc'd, restored and freed when the theme goes). Kept last so
+	 * nothing that indexes the struct above moves. */
+	short apj_menu;
+	void *apj_mgeom;
 };
 typedef struct widget_tree XA_TREE;
 
@@ -1517,6 +1527,7 @@ struct xa_window
 	short sw;			/* define middle of window (default 2 -> 1/2), used for resizing */
 	short sh;			/* height to use when SHADED */
 	short hx, hy;
+	short wdesk;			/* Bespoke workspace this window belongs to; -1 = sticky */
 
 	short handle;			/* Window handle */
 	short frame;			/* Size of the frame (0 for windowed listboxes) */

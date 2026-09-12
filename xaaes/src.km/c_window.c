@@ -32,6 +32,9 @@
 #include "k_mouse.h"
 #include "menuwidg.h"
 #include "draw_obj.h"
+#include "render_apj.h"
+#include "apj_dragstat.h"
+#include "win_draw.h"
 #include "rectlist.h"
 #include "scrlobjc.h"
 #include "widgets.h"
@@ -694,7 +697,11 @@ show_toolboxwindows(struct xa_client *client)
 	while (wind)
 	{
 		nxt = wind->next;
-		if (wind->owner == client && (wind->window_status & XAWS_BELOWROOT))
+		/* Bespoke workspaces: windows hidden by a workspace switch
+		 * (XAWS_WSHIDDEN) are belowroot too, but belong to another
+		 * desk - app-in-front must NOT resurrect them. */
+		if (wind->owner == client && (wind->window_status & XAWS_BELOWROOT)
+		    && !(wind->window_status & (XAWS_WSHIDDEN|XAWS_DOCKED)))
 		{
 			wi_move_first(&S.open_windows, wind);
 			wind->window_status &= ~XAWS_BELOWROOT;
@@ -725,6 +732,300 @@ show_toolboxwindows(struct xa_client *client)
 	}
 	set_winmouse(-1, -1);
 }
+
+/*
+ * Bespoke workspaces: kernel-side per-window hide/show, needing NO
+ * cooperation from the owning client. hide_window() above is
+ * cooperative - the window only actually moves when its owner
+ * processes the WM_MOVED (Ozk's XXX note above it), so a busy client's
+ * window would stay painted on every workspace. These instead use the
+ * belowroot machinery the toolbox-window code above has proven for
+ * years: restack below the root window, rebuild rectangle lists and
+ * generate every redraw synchronously, right here in the kernel.
+ */
+
+void
+ws_hide_window(int lock, struct xa_window *wind)
+{
+	struct xa_window *wl = wind->next;
+	GRECT r = wind->rc;
+
+	movewind_belowroot(wind);
+	wind->window_status |= XAWS_WSHIDDEN;
+	update_windows_below(0, &wind->r, NULL, wl, NULL);
+
+	/* ALSO send the cooperative off-screen move that hide_window()
+	 * sends. The belowroot restack above has already done the real
+	 * hiding - this message is for well-behaved clients whose content
+	 * is composited OUTSIDE the GEM screen: the video player's
+	 * hardware overlay plane tracks the window rect its client
+	 * reports, so the picture must follow the window off the display.
+	 * A busy client ignores it harmlessly (it is belowroot
+	 * regardless), and the paired move-back in ws_unhide_window()
+	 * restores the net position either way. */
+
+	wind->hx = wind->rc.g_x;
+	wind->hy = wind->rc.g_y;
+	r.g_x = root_window->rc.g_x + root_window->rc.g_w + 16;
+	r.g_y = root_window->rc.g_y + root_window->rc.g_h + 16;
+	if (wind->opts & XAWO_WCOWORK)
+		r = f2w(&wind->delta, &r, true);
+	send_moved(lock, wind, AMQ_NORM, &r);
+}
+
+void
+ws_unhide_window(int lock, struct xa_window *wind)
+{
+	struct xa_rect_list *rl;
+	GRECT clip, r;
+
+	wi_move_first(&S.open_windows, wind);
+	wind->window_status &= ~(XAWS_BELOWROOT | XAWS_WSHIDDEN);
+
+	make_rect_list(wind, true, RECT_SYS);
+	rl = wind->rect_list.start;
+	while (rl)
+	{
+		if (xa_rect_clip(&wind->r, &rl->r, &clip))
+			generate_redraws(0, wind, &clip, RDRW_ALL);
+		rl = rl->next;
+	}
+	update_windows_below(0, &wind->r, NULL, wind->next, NULL);
+
+	/* The paired move-back. For a client that never processed the
+	 * hide move the coordinates are unchanged and this is a no-op;
+	 * for one that did (the video player) it brings the window - and
+	 * the overlay plane tracking it - back on screen. */
+
+	r = wind->rc;
+	r.g_x = wind->hx;
+	r.g_y = wind->hy;
+	if (wind->opts & XAWO_WCOWORK)
+		r = f2w(&wind->delta, &r, true);
+	send_moved(lock, wind, AMQ_NORM, &r);
+}
+
+/*
+ * Bespoke live UI config: read/apply a settings-page value at runtime,
+ * so the Bespoke Desktop's settings dialog can alter the look and feel
+ * without a reboot. Setting ids are shared with TeraDesk (opcodes
+ * 106 GET / 107 SET in xa_appl.c). Returns the value (get) or 1/0
+ * applied/unknown (apply).
+ */
+
+#define WSCFG_LEAVE_TOP	1				/* cfg.leave_top_border   (instant)  */
+#define WSCFG_NOLIVE	2				/* outline vs live move   (next drag)*/
+#define WSCFG_FRAME		3				/* frame width thinframe   (rebuild) */
+#define WSCFG_THINWORK	4				/* thin work-area border   (rebuild) */
+#define WSCFG_WHEEL		6				/* wheel scroll amount    (instant)  */
+#define WSCFG_POPUP_TO	7				/* popup timeout          (instant)  */
+#define WSCFG_NOLEFT	8				/* keep windows on-screen left */
+
+short
+ws_cfg_get(short id)
+{
+	switch (id)
+	{
+	case WSCFG_LEAVE_TOP:	return cfg.leave_top_border;
+	case WSCFG_NOLIVE:		return default_options.nolive;
+	case WSCFG_FRAME:		return default_options.thinframe;
+	case WSCFG_THINWORK:	return default_options.thinwork;
+	case WSCFG_WHEEL:		return cfg.ver_wheel_amount;
+	case WSCFG_POPUP_TO:	return cfg.popup_timeout;
+	case WSCFG_NOLEFT:		return default_options.noleft;
+	}
+	return -1;
+}
+
+short
+ws_cfg_apply(int lock, short id, short val)
+{
+	struct xa_window *w;
+
+	switch (id)
+	{
+	case WSCFG_LEAVE_TOP:
+		cfg.leave_top_border = val ? true : false;
+		return 1;						/* takes effect on the next drag */
+
+	case WSCFG_WHEEL:
+		cfg.ver_wheel_amount = val;
+		cfg.hor_wheel_amount = val;
+		return 1;
+
+	case WSCFG_POPUP_TO:
+		cfg.popup_timeout = val;
+		return 1;
+
+	case WSCFG_NOLIVE:
+		default_options.nolive = val ? true : false;
+		for (w = window_list; w && w != root_window; w = w->next)
+			if (w->owner)
+				w->owner->options.nolive = default_options.nolive;
+		return 1;
+
+	case WSCFG_NOLEFT:
+		default_options.noleft = val ? true : false;
+		for (w = window_list; w && w != root_window; w = w->next)
+			if (w->owner)
+				w->owner->options.noleft = default_options.noleft;
+		return 1;
+
+	case WSCFG_FRAME:
+	case WSCFG_THINWORK:
+		if (id == WSCFG_FRAME)
+			default_options.thinframe = val;
+		else
+			default_options.thinwork = val ? true : false;
+
+		/* Rebuild every open, listed window with the new frame/thinwork,
+		 * using XaAES's own widget re-apply path (as iconify/shade do). */
+
+		for (w = window_list; w && w != root_window; w = w->next)
+		{
+			if (w->nolist || !(w->window_status & XAWS_OPEN))
+				continue;
+
+			if (w->owner)
+			{
+				w->owner->options.thinframe = default_options.thinframe;
+				w->owner->options.thinwork = default_options.thinwork;
+			}
+
+			w->frame = default_options.thinframe;
+			w->thinwork = MONO ? true : default_options.thinwork;
+
+			standard_widgets(w, w->active_widgets, true);
+			set_and_update_window(w, true, false, NULL);
+		}
+		return 1;
+	}
+
+	return 0;
+}
+
+
+/*
+ * Bespoke theme, GEM chrome: remap one standard pen on XaAES's OWN
+ * workstation. At truecolour depths VDI palettes are per-workstation,
+ * so the desktop shell's vs_color cannot reach the window chrome
+ * (titles, borders, sliders) that XaAES draws - these two opcodes
+ * (108 set / 109 reset, xa_appl.c) let it push the same remap here.
+ *
+ * val packs everything in one long: 0xPPRRGGBB (pen 0-15 + RGB).
+ * The first touch of a pen captures its original colour; ws_gem_reset
+ * puts every touched pen back exactly, so cycling to the default
+ * theme is a perfect round trip. Mono screens: no-op.
+ */
+
+static struct rgb_1000 ws_pen_save[16];
+static unsigned short ws_pen_saved = 0;	/* bitmask of captured pens */
+
+/*
+ * Are the standard GEM pens currently remapped to a theme? Drawing code
+ * needs to know: the remap sends pen 0 (white) AND pen 1 (black) to the
+ * theme's text colour, so anything that puts pen-1 text on a pen-0
+ * background - the top window's info line - has to pick other pens.
+ */
+short
+ws_pens_themed(void)
+{
+	return ws_pen_saved ? 1 : 0;
+}
+
+
+short
+ws_gem_pen(long val)
+{
+	short pen = (short) ((val >> 24) & 0xff);
+	short rgb[3];
+
+	if (pen > 15 || screen.colours < 16)
+		return 0;
+
+	if (!(ws_pen_saved & (1 << pen)))
+	{
+		if (vq_color(global_vdi_settings.handle, pen, 0, (short *) &ws_pen_save[pen]) < 0)
+			return 0;
+		ws_pen_saved |= (unsigned short) (1 << pen);
+	}
+
+	rgb[0] = (short) (((val >> 16) & 0xff) * 1000L / 255L);
+	rgb[1] = (short) (((val >>  8) & 0xff) * 1000L / 255L);
+	rgb[2] = (short) (( val        & 0xff) * 1000L / 255L);
+
+	vs_color(global_vdi_settings.handle, pen, rgb);
+
+	return 1;
+}
+
+/*
+ * APJ-OS: (re)skin every window this client owns after its theme
+ * changed - opcode 113 (theme committed) or 112 (theme dropped). The
+ * colour sets are rewritten in place and the window redrawn whole,
+ * frame included, through the normal redraw path.
+ */
+void
+apj_chrome_apply(int lock, struct xa_client *client, short on)
+{
+	struct xa_window *w;
+
+	/* geometry: the client's widget layouts (its own copies) */
+	if (client->widget_theme)
+	{
+		apj_chrome_layout(client->widget_theme->client, on);
+		apj_chrome_layout(client->widget_theme->alert, on);
+	}
+
+	for (w = window_list; w && w != root_window; w = w->next)
+	{
+		if (w->owner != client)
+			continue;
+
+		apj_chrome_colours(w->ontop_cols, on, 1, w->class);
+		apj_chrome_colours(w->untop_cols, on, 0, w->class);
+		w->x_shadow = w->y_shadow = apj_window_fluent(w) ? 0 : 1;
+
+		if (w->nolist)
+			continue;
+
+		/* re-lay-out with the new widget sizes/order, same outer rect,
+		 * the way the fullscreen toggle does; the app is told its work
+		 * area moved with a WM_SIZED of the unchanged rect */
+		if (!is_iconified(w) && !(w->window_status & XAWS_SHADED))
+		{
+			GRECT owa = w->wa;
+
+			change_window_attribs(lock, client, w, w->active_widgets, false, false, 0, w->r, NULL);
+
+			/* Tell the program only if its work area really moved. A
+			 * window with no chrome to re-lay-out (TeraDesk's taskbar and
+			 * tooltips) has no WM_SIZED handler - TeraDesk called a NULL
+			 * handler and crashed on every theme switch. */
+			if (!w->dial && w->send_message &&
+			    (owa.g_x != w->wa.g_x || owa.g_y != w->wa.g_y ||
+			     owa.g_w != w->wa.g_w || owa.g_h != w->wa.g_h))
+				w->send_message(lock, w, NULL, AMQ_NORM, QMF_CHKDUP,
+					WM_SIZED, 0, 0, w->handle, w->r.g_x, w->r.g_y, w->r.g_w, w->r.g_h);
+		}
+
+		if ((w->window_status & XAWS_OPEN))
+			generate_redraws(lock, w, &w->r, RDRW_ALL);
+	}
+}
+
+short
+ws_gem_reset(void)
+{
+	short i;
+
+	for (i = 0; i < 16; i++)
+		if (ws_pen_saved & (1 << i))
+			vs_color(global_vdi_settings.handle, i, (short *) &ws_pen_save[i]);
+
+	return 1;
+}
+
 
 /*
  * ONLY call from from correct context
@@ -835,6 +1136,7 @@ send_moved(int lock, struct xa_window *wind, short amq, GRECT *r)
 	if (wind->send_message)
 	{
 		C.move_block = 2;
+		apj_ds_moved();
 		wind->send_message(lock, wind, NULL, amq, QMF_CHKDUP,
 			WM_MOVED, 0, 0, wind->handle,
 			r->g_x, r->g_y, r->g_w, r->g_h);
@@ -1046,9 +1348,209 @@ remove_from_iredraw_queue(int lock, struct xa_window *wind)
 	}
 }
 
+/*
+ * APJ-OS taskbar dock. While a dock is registered (appl_control 116, the
+ * Fluent taskbar), a window being iconified is not given a spot in the
+ * icon grid: it is iconified off-screen and stacked below the root window
+ * - the kernel-side hiding the workspaces use - and appears as a taskbar
+ * tile (list: 117). A tile click (118/119) brings it above the root
+ * and asks its owner to uniconify it. Dock gone: back to the icon grid.
+ */
+static struct xa_client *apj_dock_client = NULL;
+
+static bool
+apj_dockable(struct xa_window *w)
+{
+	return apj_dock_client && !(apj_dock_client->status & CS_EXITING)
+	    && w != root_window && !w->nolist
+	    && (w->window_status & XAWS_OPEN)
+	    && !(w->owner->status & CS_EXITING)
+	    && w->owner != C.Aes && w->owner != C.Hlp;
+}
+
+static void
+apj_dock_window(int lock, struct xa_window *wind, GRECT *r)
+{
+	bool had_focus = (S.focus == wind);
+	GRECT ic = iconify_grid(0);
+
+	r->g_w = ic.g_w;
+	r->g_h = ic.g_h;
+	r->g_x = root_window->rc.g_x + root_window->rc.g_w + 16;
+	r->g_y = root_window->rc.g_y + root_window->rc.g_h + 16;
+
+	/* iconify where nothing shows; move_window repaints what it covered */
+	move_window(lock, wind, true, XAWS_ICONIFIED, r->g_x, r->g_y, r->g_w, r->g_h);
+	wind->window_status &= ~XAWS_CHGICONIF;
+	wind->window_status |= XAWS_DOCKED;
+
+	movewind_belowroot(wind);
+
+	if (had_focus)
+	{
+		struct xa_window *nf = window_list;
+
+		/* the next titled window - not a bar or panel without one */
+		while (nf && nf != root_window &&
+		       ((nf->window_status & (XAWS_ICONIFIED|XAWS_HIDDEN|XAWS_NOFOCUS)) ||
+		        !(nf->active_widgets & NAME)))
+			nf = nf->next;
+		if (nf == root_window)
+			nf = NULL;
+		setnew_focus(nf, wind, true, true, true);
+	}
+	set_winmouse(-1, -1);
+}
+
+/* Back into the icon grid - the dock went away */
+static void
+apj_dock_release_all(int lock)
+{
+	struct xa_window *w = root_window->next, *nxt;
+
+	while (w)
+	{
+		nxt = w->next;
+		if ((w->window_status & (XAWS_OPEN|XAWS_DOCKED)) == (XAWS_OPEN|XAWS_DOCKED)
+		    && !(w->owner->status & CS_EXITING))
+		{
+			GRECT r = free_icon_pos(lock, w);
+
+			w->window_status &= ~(XAWS_DOCKED|XAWS_BELOWROOT);
+			wi_move_first(&S.open_windows, w);
+			set_and_update_window(w, false, false, &r);
+			update_windows_below(lock, &w->r, NULL, w->next, NULL);
+		}
+		else
+			w->window_status &= ~XAWS_DOCKED;
+		w = nxt;
+	}
+	set_winmouse(-1, -1);
+}
+
+short
+apj_dock_register(int lock, struct xa_client *client, short on)
+{
+	if (on)
+		apj_dock_client = client;
+	else if (apj_dock_client == client)
+	{
+		apj_dock_client = NULL;
+		apj_dock_release_all(lock);
+	}
+	return 1;
+}
+
+void
+apj_dock_client_exit(int lock, struct xa_client *client)
+{
+	if (client == apj_dock_client)
+	{
+		apj_dock_client = NULL;
+		apj_dock_release_all(lock);
+	}
+}
+
+/* Minimised windows on the current workspace, newest first */
+short
+apj_dock_list(struct apj_dockent *e)
+{
+	struct xa_window *w;
+	short max, n = 0;
+
+	if (!e || (max = e[0].handle) <= 0)
+		return 0;
+
+	for (w = window_list; w && n < max; w = w->next)
+	{
+		if ((w->window_status & (XAWS_OPEN|XAWS_DOCKED)) != (XAWS_OPEN|XAWS_DOCKED)
+		    || (w->owner->status & CS_EXITING)
+		    || (w->wdesk >= 0 && w->wdesk != ws_current))
+			continue;
+		e[n].handle = w->handle;
+		e[n].apid = w->owner->p->pid;
+		strncpy(e[n].title, w->wname, sizeof(e[n].title) - 1);
+		e[n].title[sizeof(e[n].title) - 1] = '\0';
+		n++;
+	}
+	return n;
+}
+
+short
+apj_dock_restore(int lock, struct xa_window *w)
+{
+	GRECT r;
+
+	if (!w || (w->window_status & (XAWS_OPEN|XAWS_DOCKED)) != (XAWS_OPEN|XAWS_DOCKED)
+	    || !w->send_message || (w->owner->status & CS_EXITING))
+		return 0;
+
+	/* above the root again (still off-screen), on top and focused;
+	 * the owner's wind_set(WF_UNICONIFY) brings it back */
+	if (w->window_status & XAWS_BELOWROOT)
+	{
+		w->window_status &= ~XAWS_BELOWROOT;
+		top_window(lock, true, true, w);
+	}
+
+	r = w->ro;
+	if (w->opts & XAWO_WCOWORK)
+		r = f2w(&w->save_delta, &r, true);
+	w->t = r;
+	w->window_status |= XAWS_CHGICONIF;
+	w->send_message(lock, w, NULL, AMQ_NORM, QMF_CHKDUP,
+			WM_UNICONIFY, 0, 0, w->handle,
+			r.g_x, r.g_y, r.g_w, r.g_h);
+	return 1;
+}
+
+short
+apj_dock_restore_app(int lock, short apid)
+{
+	struct xa_window *w = window_list, *nxt;
+	short n = 0;
+
+	while (w)
+	{
+		nxt = w->next;
+		if (w->owner->p->pid == apid && (w->window_status & XAWS_DOCKED)
+		    && (w->wdesk < 0 || w->wdesk == ws_current))
+			n += apj_dock_restore(lock, w);
+		w = nxt;
+	}
+	return n;
+}
+
+/*
+ * APJ-OS: a window that is only a surface its owner paints - the menu bar
+ * window, and a window opened with no widgets at all (the desktop's
+ * taskbar). The work-area frame the AES draws round every other window
+ * (a 1px line, or the 3D white/grey hooks when "thin work border" is off)
+ * has nothing to frame here: it lands under the menu bar and under the
+ * taskbar as a bright line across the screen.
+ */
+short
+apj_bare_window(struct xa_window *wind)
+{
+	if (!wind || wind == root_window)
+		return 0;
+	if ((wind->dial & created_for_MENUBAR))
+		return 1;
+	if (wind->active_widgets)
+		return 0;
+	return (wind->dial & (created_for_FMD_START | created_for_FORM_DO |
+			      created_for_WDIAL | created_for_ALERT |
+			      created_for_SLIST | created_for_POPUP)) ? 0 : 1;
+}
+
 void
 iconify_window(int lock, struct xa_window *wind, GRECT *r)
 {
+	if (apj_dockable(wind))
+	{
+		apj_dock_window(lock, wind, r);
+		return;
+	}
 	if ((r->g_w == -1 && r->g_h == -1) || (!r->g_w && !r->g_h) || (r->g_y + r->g_h + cfg.icnfy_b_y != screen.r.g_h))
 		*r = free_icon_pos(lock, NULL);
 
@@ -1059,6 +1561,16 @@ iconify_window(int lock, struct xa_window *wind, GRECT *r)
 void
 uniconify_window(int lock, struct xa_window *wind, GRECT *r)
 {
+	/* APJ-OS dock: an owner may uniconify a minimised window by itself */
+	if (wind->window_status & XAWS_DOCKED)
+	{
+		wind->window_status &= ~XAWS_DOCKED;
+		if (wind->window_status & XAWS_BELOWROOT)
+		{
+			wind->window_status &= ~XAWS_BELOWROOT;
+			top_window(lock, true, true, wind);
+		}
+	}
 	move_window(lock, wind, true, ~XAWS_ICONIFIED, r->g_x, r->g_y, r->g_w, r->g_h);
 	wind->window_status &= ~XAWS_CHGICONIF;
 
@@ -1298,6 +1810,14 @@ create_window(
 	w->active_theme->links++;
 
 	(*client->xmwt->new_color_theme)(client->wtheme_handle, w->class, &w->ontop_cols, &w->untop_cols);
+
+	/* APJ-OS: a client on render_apj with a theme loaded gets Fluent chrome */
+	if (client_apj_chrome(client))
+	{
+		apj_chrome_colours(w->ontop_cols, 1, 1, w->class);
+		apj_chrome_colours(w->untop_cols, 1, 0, w->class);
+	}
+
 	w->colours = w->ontop_cols;
 
 	w->wheel_mode = client->options.wheel_mode;
@@ -1313,6 +1833,10 @@ create_window(
 
 	w->x_shadow = 1;
 	w->y_shadow = 1;
+	/* APJ-OS: a Fluent window has no hard 1px drop shadow - it would
+	 * draw a black step across a rounded corner */
+	if (apj_window_fluent(w))
+		w->x_shadow = w->y_shadow = 0;
 	w->wa_frame = true;
 
 	if (nolist)
@@ -1548,6 +2072,19 @@ open_window(int lock, struct xa_window *wind, GRECT r)
 		swap_menu(lock|LOCK_DESK, wind->owner, NULL, SWAPM_DESK); // | SWAPM_TOPW);
 
 		return 0;
+	}
+
+	/* Bespoke workspaces: a window belongs to the workspace that is
+	 * current the moment it first opens - the WINDOW, not the app, so
+	 * each console TOSWIN2 opens lands on the desk it was started from.
+	 * Sticky windows (wdesk = -1, set via appl_control 103) and system
+	 * clients are handled at switch time; see ws_switch() in app_man.c. */
+
+	if (wind != root_window && !wind->nolist && wind->wdesk >= 0)
+	{
+		wind->wdesk = ws_current;
+		/* a stale switch-hidden bit must never survive a reopen */
+		wind->window_status &= ~XAWS_WSHIDDEN;
 	}
 
 	if (wind->nolist || (wind->dial & created_for_SLIST))
@@ -2002,9 +2539,37 @@ pull_wind_to_top(int lock, struct xa_window *w)
 	}
 	else if (!(w->owner->status & CS_EXITING))
 	{
+		bool wsret = false;
+
 		below = w->next;
 		above = w->prev;
 		r = w->r;
+
+		/* Bespoke workspaces: topping a workspace-hidden window pulls
+		 * it onto the CURRENT workspace - an app raising a dialog
+		 * while its desk is not in view must not hang invisibly. The
+		 * belowroot bit must clear BEFORE the rect lists rebuild
+		 * below, while the rebuild still takes the from-root path. */
+
+		if ((w->window_status & (XAWS_WSHIDDEN | XAWS_BELOWROOT))
+		            == (XAWS_WSHIDDEN | XAWS_BELOWROOT))
+		{
+			GRECT mr;
+
+			w->window_status &= ~(XAWS_WSHIDDEN | XAWS_BELOWROOT);
+			if (w->wdesk >= 0)
+				w->wdesk = ws_current;
+			wsret = true;
+
+			/* undo the cooperative off-screen move of
+			 * ws_hide_window() - no-op if never processed */
+			mr = w->rc;
+			mr.g_x = w->hx;
+			mr.g_y = w->hy;
+			if (w->opts & XAWO_WCOWORK)
+				mr = f2w(&w->delta, &mr, true);
+			send_moved(lock, w, AMQ_NORM, &mr);
+		}
 
 		wi_move_first(&S.open_windows, w);
 		wl = window_list;
@@ -2013,7 +2578,7 @@ pull_wind_to_top(int lock, struct xa_window *w)
 		{
 			if (wl == w)
 			{
-				if (w->window_status & XAWS_BELOWROOT)
+				if (wsret || (w->window_status & XAWS_BELOWROOT))
 					wl = root_window;
 				else
 					wl = above;
@@ -2109,6 +2674,106 @@ static void print_rect_list( struct xa_window *wind )
 }
 #endif
 /*
+ * Resize the root menu bar to bh pixels and move the root window's work
+ * area to match. Factored out of set_standard_point() so the APJ-OS
+ * Fluent theme can change the bar height without a font change.
+ */
+static void set_menu_bar_height(short bh)
+{
+	struct xa_widget *xaw = get_menu_widg(), *xat = get_widget(root_window, XAW_TOOLBAR);
+	XA_TREE *wt = xat->stuff.wt;
+
+	C.Aes->std_menu->tree->ob_height = bh;
+	xaw->r.g_h = xaw->ar.g_h = xat->r.g_h = xat->ar.g_h = bh;
+
+	if( cfg.menu_bar == 2 || (cfg.menu_bar == 1 && !cfg.menu_layout && !cfg.menu_ontop) )
+	{
+		root_window->wa.g_h = screen.r.g_h - xaw->r.g_h;
+		root_window->wa.g_y = xaw->r.g_h;
+	}
+	else
+	{
+		root_window->wa.g_h = screen.r.g_h;
+		root_window->wa.g_y = 0;
+	}
+	if( menu_window && cfg.menu_bar != 2 && cfg.menu_ontop && cfg.menu_bar )
+	{
+		menu_window->r.g_w = xaw->r.g_w;
+		menu_window->r.g_h = xaw->r.g_h;
+		if( menu_window->window_status & XAWS_OPEN)
+		{
+			move_window( 0, menu_window, true, 0, menu_window->r.g_x, menu_window->r.g_y, menu_window->r.g_w, menu_window->r.g_h );
+			redraw_menu_area();
+		}
+	}
+
+	//GRECT rc = screen.r;
+	//update_windows_below(0, &rc, &rc, window_list, NULL);
+	root_window->rwa = root_window->wa;
+
+	if (get_desktop()->owner == C.Aes)
+	{
+		wt->tree->ob_height = root_window->wa.g_h;
+		wt->tree->ob_y = root_window->wa.g_y;
+	}
+}
+
+/*
+ * APJ-OS: the Fluent theme was committed (113) or dropped (112). The root
+ * menu bar changes height and every installed root menu is re-laid-out
+ * (fix_menu puts the stock geometry back first, then applies the Fluent
+ * one if the theme is live), then the whole screen is redrawn.
+ *
+ * A desktop tree owned by an application is not moved: it keeps the
+ * area it was given, the bar just covers a few more of its top pixels.
+ */
+void apj_flush_wc_caches(void)
+{
+	struct xa_client *cl;
+
+	/* APJ-OS: wind_calc answers from a per-client cache of frame deltas
+	 * made with a throwaway window. Those deltas depend on whether the
+	 * client gets Fluent chrome, so a theme commit (113) or drop (112)
+	 * invalidates every client's cache - a program started before the
+	 * commit (TosWin2) otherwise sized its text from stock deltas. */
+	FOREACH_CLIENT(cl)
+	{
+		delete_wc_cache(&cl->wcc);
+	}
+}
+
+void apj_menu_relayout(int lock)
+{
+	struct xa_client *cl;
+	short bh = apj_menu_bar_height(screen.c_max_h);
+	GRECT r = screen.r;
+
+	if( cfg.menu_layout || !C.Aes->std_menu )
+		return;
+
+	popout(TAB_LIST_START);
+
+	if( get_menu_widg()->r.g_h != bh )
+		set_menu_bar_height(bh);
+
+	FOREACH_CLIENT(cl)
+	{
+		if( cl->std_menu )
+			fix_menu(cl->std_menu, root_window);
+		if( cl->nxt_menu && cl->nxt_menu != cl->std_menu )
+			fix_menu(cl->nxt_menu, root_window);
+	}
+	/* fix_menu set the AES menu tree to the bar minus its line; that
+	 * tree's height is what get_menu_height() reports, so put it back */
+	C.Aes->std_menu->tree->ob_height = bh;
+	if( get_menu() && get_menu()->owner )
+		set_rootmenu_area(get_menu()->owner);
+
+	update_windows_below(lock, &r, NULL, window_list, NULL);
+	redraw_menu(lock);
+}
+
+/*
  * set point-size for main-menu
  * adjust root-window-size
  * also used to switch menubar on/off
@@ -2118,8 +2783,7 @@ void set_standard_point(struct xa_client *client)
 	static int old_menu_bar = -1;
 	short w, h;
 	bool new_menu_sz = true;
-	struct xa_widget *xaw = get_menu_widg(), *xat = get_widget(root_window, XAW_TOOLBAR);
-	XA_TREE *wt = xat->stuff.wt;
+	struct xa_widget *xaw = get_menu_widg();
 	struct xa_vdi_settings *v = client->vdi_settings;
 
 	if( C.boot_focus && client->p != C.boot_focus)
@@ -2161,39 +2825,8 @@ void set_standard_point(struct xa_client *client)
 	screen.c_max_h = h;
 	if( new_menu_sz == true )
 	{
-		C.Aes->std_menu->tree->ob_height = h + 2;
-		xaw->r.g_h = xaw->ar.g_h = xat->r.g_h = xat->ar.g_h = h + 2;
-
-		if( cfg.menu_bar == 2 || (cfg.menu_bar == 1 && !cfg.menu_layout && !cfg.menu_ontop) )
-		{
-			root_window->wa.g_h = screen.r.g_h - xaw->r.g_h;
-			root_window->wa.g_y = xaw->r.g_h;
-		}
-		else
-		{
-			root_window->wa.g_h = screen.r.g_h;
-			root_window->wa.g_y = 0;
-		}
-		if( menu_window && cfg.menu_bar != 2 && cfg.menu_ontop && cfg.menu_bar )
-		{
-			menu_window->r.g_w = xaw->r.g_w;
-			menu_window->r.g_h = xaw->r.g_h;
-			if( menu_window->window_status & XAWS_OPEN)
-			{
-				move_window( 0, menu_window, true, 0, menu_window->r.g_x, menu_window->r.g_y, menu_window->r.g_w, menu_window->r.g_h );
-				redraw_menu_area();
-			}
-		}
-
-		//GRECT rc = screen.r;
-		//update_windows_below(0, &rc, &rc, window_list, NULL);
-		root_window->rwa = root_window->wa;
-
-		if (get_desktop()->owner == C.Aes)
-		{
-			wt->tree->ob_height = root_window->wa.g_h;
-			wt->tree->ob_y = root_window->wa.g_y;
-		}
+		/* APJ-OS: h + 2 stock, taller under the Fluent theme */
+		set_menu_bar_height(apj_menu_bar_height(h));
 	}
 }
 
@@ -2246,6 +2879,31 @@ void toggle_menu(int lock, short md)
 		redraw_menu_area();
 	}
 
+}
+
+/*
+ * APJ-OS: rounded-corner redraws put off during a live drag (move_window)
+ */
+static struct xa_window *apj_corners_deferred = NULL;
+
+void
+apj_corners_flush(int lock, struct xa_window *wind)
+{
+	GRECT cb[4];
+	short i, ncb;
+	struct xa_window *nxt;
+
+	if (!wind || wind != apj_corners_deferred)
+		return;
+	apj_corners_deferred = NULL;
+
+	if (!(wind->window_status & XAWS_OPEN) || (wind->active_widgets & STORE_BACK))
+		return;
+
+	nxt = wind->nolist ? (wind->next ? wind->next : window_list) : wind->next;
+	ncb = apj_corner_boxes(wind, cb);
+	for (i = 0; i < ncb; i++)
+		update_windows_below(lock, &cb[i], NULL, nxt, NULL);
 }
 
 /*
@@ -2356,7 +3014,33 @@ move_window(int lock, struct xa_window *wind, bool blit, WINDOW_STATUS newstate,
 	if ((wind->window_status & XAWS_OPEN) && !(wind->dial & created_for_SLIST) && !(wind->active_widgets & STORE_BACK))
 	{
 		struct xa_window *nxt = wind->nolist ? (wind->next ? wind->next : window_list) : wind->next;
+		GRECT cb[4];
+		short i, ncb;
+
 		update_windows_below(lock, &old, &new, nxt, NULL);
+
+		/* APJ-OS: the corners of a rounded window belong to what lies
+		 * beneath. At the new position they still show whatever was on
+		 * the screen (the blit, or the window's own old pixels), and
+		 * nothing below was told - so ask for them explicitly. */
+		/* Only when the window really moved or changed size: a wind_set
+		 * of the same rectangle (many programs do that from their redraw
+		 * handler) must not send redraws to the windows below - two such
+		 * programs overlapping would redraw each other forever. */
+		ncb = (old.g_x != wind->r.g_x || old.g_y != wind->r.g_y ||
+		       old.g_w != wind->r.g_w || old.g_h != wind->r.g_h) ? apj_corner_boxes(wind, cb) : 0;
+
+		/* During a live drag or resize of this window every mouse step
+		 * lands here; four extra rect-list rebuilds and redraw messages to
+		 * the programs below each time made the drag stutter. Defer: the
+		 * corners are put right once, when the drag ends. */
+		if (ncb && widget_active.widg && widget_active.cont && widget_active.wind == wind)
+		{
+			apj_corners_deferred = wind;
+			ncb = 0;
+		}
+		for (i = 0; i < ncb; i++)
+			update_windows_below(lock, &cb[i], NULL, nxt, NULL);
 	}
 
 	/*
@@ -2364,8 +3048,13 @@ move_window(int lock, struct xa_window *wind, bool blit, WINDOW_STATUS newstate,
 	 * being generated (C.move_block is set to 3 when WM_REDRAWS
 	 * are added to a clients msg queue), we release move_block here
 	 */
+	if (widget_active.widg && widget_active.wind == wind)
+		apj_ds_set(C.redraws);
 	if (!C.redraws && C.move_block != 3)
+	{
+		apj_ds_unblock(2);
 		C.move_block = 0;
+	}
 	{
 		short y = old.g_y < new.g_y ? old.g_y : new.g_y;
 		if( !cfg.menu_ontop && cfg.menu_bar && y < get_menu_height() )
@@ -3110,6 +3799,47 @@ static bool join_redraws( short wlock, struct xa_window *wind, struct xa_rect_li
 	return false;
 }
 
+/*
+ * APJ-OS: reorder blit rects (window-relative) so that copying each one by
+ * (dx, dy) never lands on a rect that has not been copied yet. Such an
+ * order always exists for disjoint rectangles moved by one offset.
+ */
+static void
+apj_blit_order(struct xa_rect_list **list, short dx, short dy)
+{
+	struct xa_rect_list *done = NULL, **tail = &done;
+
+	while (*list)
+	{
+		struct xa_rect_list **pick = list, **pp, *q;
+
+		for (pp = list; *pp; pp = &(*pp)->next)
+		{
+			short x1 = (*pp)->r.g_x + dx, y1 = (*pp)->r.g_y + dy;
+			short x2 = x1 + (*pp)->r.g_w, y2 = y1 + (*pp)->r.g_h;
+
+			for (q = *list; q; q = q->next)
+			{
+				if (q != *pp &&
+				    x1 < q->r.g_x + q->r.g_w && q->r.g_x < x2 &&
+				    y1 < q->r.g_y + q->r.g_h && q->r.g_y < y2)
+					break;
+			}
+			if (!q)
+			{
+				pick = pp;
+				break;
+			}
+		}
+		q = *pick;
+		*pick = q->next;
+		q->next = NULL;
+		*tail = q;
+		tail = &q->next;
+	}
+	*list = done;
+}
+
 static void
 set_and_update_window(struct xa_window *wind, bool blit, bool only_wa, GRECT *new)
 {
@@ -3492,19 +4222,14 @@ set_and_update_window(struct xa_window *wind, bool blit, bool only_wa, GRECT *ne
 			 */
 			if (xmove || ymove)
 			{
-				struct xa_rect_list *trl = 0;
-				nrl = brl;
+				/* APJ-OS: an order in which no blit overwrites a source still to
+				 * be copied. The sort above assumes the stock band-shaped lists;
+				 * a rounded window's strips (and their occluder splits) break it
+				 * and left stale copies inside the window when dragged quickly. */
+				apj_blit_order(&brl, (dir & 2) ? xmove : -xmove, (dir & 1) ? ymove : -ymove);
 				hidem();
-				while (nrl)
+				for (nrl = brl; nrl; nrl = nrl->next)
 				{
-					/* first blit lower rect if two left, moving down and upper rect partly hidden by menubar (see build_rectlist - surely a hack ..) */
-					if( menu_window && cfg.menu_bar && (dir & 1) && nrl->r.g_y < menu_window->r.g_h )
-						if( nrl->next && !nrl->next->next && nrl->r.g_y + nrl->r.g_h == nrl->next->r.g_y && !trl )
-						{
-							trl = nrl;
-							nrl = nrl->next;
-							dir = 0;
-						}
 					bd = nrl->r;
 					bs.g_x = bd.g_x + new->g_x;
 					bs.g_y = bd.g_y + new->g_y;
@@ -3512,20 +4237,7 @@ set_and_update_window(struct xa_window *wind, bool blit, bool only_wa, GRECT *ne
 					bs.g_h = bd.g_h;
 					bd.g_x += old.g_x;
 					bd.g_y += old.g_y;
-					//DIAGS(("Blitting from %d/%d/%d/%d to %d/%d/%d/%d (%lx, %lx)",
-					//	bd, bs, brl, (long)brl->next));
 					(*xa_vdiapi->form_copy)(&bd, &bs);
-					if( trl )
-					{
-						if( nrl == trl )
-						{
-							nrl = 0;	//nrl->next->next;
-							trl = 0;
-						}
-						nrl = trl;
-					}
-					else
-						nrl = nrl->next;
 				}
 				showm();
 			}
