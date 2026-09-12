@@ -2093,6 +2093,16 @@ d_waframe(struct xa_window *wind, const GRECT *clip)
 			return;
 	}
 
+	/*
+	 * APJ-OS: a Fluent window has no work-area bevel, whatever the owner's
+	 * thinwork option says. The stock G_LBLACK/G_WHITE hooks below were
+	 * turning up around MP3GEM's window because its app had no thinwork
+	 * entry in xaaes.cnf - a per-app flag that should not decide the look
+	 * of a themed frame.
+	 */
+	if (apj_wc(wind))
+		return;
+
 	if (wind->thinwork)
 	{
 		if (wind->wa_frame && wind->wa_borders)
