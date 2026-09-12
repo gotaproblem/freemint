@@ -2950,7 +2950,7 @@ calc_work_area(struct xa_window *wind)
 	bool shaded = wind->window_status & XAWS_SHADED;
 	/* APJ-OS: a Fluent window is one flat surface inside its border -
 	 * no work area frame line on the sides no widget covers */
-	bool waf = wind->wa_frame && !apj_window_fluent(wind);
+	bool waf = wind->wa_frame && !apj_window_fluent(wind) && !apj_bare_window(wind);
 
 	/* a colour work area frame is larger to allow for the
 	 * fancy borders :-) unless thinwork has been specified
@@ -3018,7 +3018,7 @@ calc_work_area(struct xa_window *wind)
 		wa_borders |= WAB_RIGHT;
 	}
 
-	if (wind->frame >= 0 && !wind->thinwork)
+	if (wind->frame >= 0 && !wind->thinwork && !apj_bare_window(wind))
 	{
 		wind->wadelta.g_x += 2, wind->wadelta.g_y += 2;
 		wind->wadelta.g_w += 4, wind->wadelta.g_h += 4;

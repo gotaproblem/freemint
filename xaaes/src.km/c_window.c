@@ -1506,6 +1506,28 @@ apj_dock_restore_app(int lock, short apid)
 	return n;
 }
 
+/*
+ * APJ-OS: a window that is only a surface its owner paints - the menu bar
+ * window, and a window opened with no widgets at all (the desktop's
+ * taskbar). The work-area frame the AES draws round every other window
+ * (a 1px line, or the 3D white/grey hooks when "thin work border" is off)
+ * has nothing to frame here: it lands under the menu bar and under the
+ * taskbar as a bright line across the screen.
+ */
+short
+apj_bare_window(struct xa_window *wind)
+{
+	if (!wind || wind == root_window)
+		return 0;
+	if ((wind->dial & created_for_MENUBAR))
+		return 1;
+	if (wind->active_widgets)
+		return 0;
+	return (wind->dial & (created_for_FMD_START | created_for_FORM_DO |
+			      created_for_WDIAL | created_for_ALERT |
+			      created_for_SLIST | created_for_POPUP)) ? 0 : 1;
+}
+
 void
 iconify_window(int lock, struct xa_window *wind, GRECT *r)
 {

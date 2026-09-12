@@ -2084,6 +2084,15 @@ d_waframe(struct xa_window *wind, const GRECT *clip)
 	struct xa_vdi_api *vapi = v->api;
 	GRECT wa = (wind->dial & created_for_TOOLBAR) ? wind->rwa : wind->wa;	/*(?)*/
 
+	/* APJ-OS: a bar or panel its owner paints whole - no frame of ours
+	 * (c_window.h drags in half the kernel here, so declare it) */
+	{
+		short apj_bare_window(struct xa_window *wind);
+
+		if (apj_bare_window(wind))
+			return;
+	}
+
 	if (wind->thinwork)
 	{
 		if (wind->wa_frame && wind->wa_borders)

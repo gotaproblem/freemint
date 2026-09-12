@@ -125,6 +125,7 @@ void	apj_chrome_apply(int lock, struct xa_client *client, short on);
 void	apj_menu_relayout(int lock);
 void	apj_flush_wc_caches(void);
 void	apj_corners_flush(int lock, struct xa_window *wind);	/* corners deferred during a live drag */
+short	apj_bare_window(struct xa_window *wind);	/* a bar or panel: no work-area frame */
 
 /* APJ-OS taskbar dock (appl_control 116-119): minimised windows leave the
  * screen and are listed for the dock instead of the icon grid */
