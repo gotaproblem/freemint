@@ -2524,7 +2524,29 @@ d_info(struct xa_window *wind, struct xa_widget *widg, const GRECT *clip)
 	struct xa_wtexture *t = NULL;
 	struct xa_vdi_settings *v = wind->vdi_settings;
 	GRECT dr = v->clip;
+	struct xa_wcol_inf lci;
+	struct xa_wtxt_inf lti;
 
+	/* APJ-OS: the top window's info line is white (pen 0) with black
+	 * text (pen 1) - and a bespoke theme's GEM pen remap sends BOTH of
+	 * those to its text colour, so the text vanished into its own strip
+	 * while the untopped window (face pen 8, dark pen 9) stayed
+	 * readable. Borrow the untopped window's pens while a theme is
+	 * pushed: face and dark are different roles by definition.
+	 */
+	{
+		short ws_pens_themed(void);		/* c_window.h drags in too much */
+
+		if (ws_pens_themed() && !apj_wc(wind) && (wc->flags & WCF_TOP))
+		{
+			lci = *wci;
+			lti = *wti;
+			lci.normal.c = lci.selected.c = lci.highlighted.c = G_LWHITE;
+			lti.normal.fg = lti.selected.fg = lti.highlighted.fg = G_LBLACK;
+			wci = &lci;
+			wti = &lti;
+		}
+	}
 
 	/* Convert relative coords and window location to absolute screen location */
 	(*api->rp2ap)(wind, widg, &widg->ar);

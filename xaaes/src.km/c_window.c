@@ -920,6 +920,19 @@ ws_cfg_apply(int lock, short id, short val)
 static struct rgb_1000 ws_pen_save[16];
 static unsigned short ws_pen_saved = 0;	/* bitmask of captured pens */
 
+/*
+ * Are the standard GEM pens currently remapped to a theme? Drawing code
+ * needs to know: the remap sends pen 0 (white) AND pen 1 (black) to the
+ * theme's text colour, so anything that puts pen-1 text on a pen-0
+ * background - the top window's info line - has to pick other pens.
+ */
+short
+ws_pens_themed(void)
+{
+	return ws_pen_saved ? 1 : 0;
+}
+
+
 short
 ws_gem_pen(long val)
 {

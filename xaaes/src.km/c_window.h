@@ -121,6 +121,7 @@ short	ws_cfg_get(short id);
 short	ws_cfg_apply(int lock, short id, short val);
 short	ws_gem_pen(long val);
 short	ws_gem_reset(void);
+short	ws_pens_themed(void);	/* GEM pens remapped to a theme? */
 void	apj_chrome_apply(int lock, struct xa_client *client, short on);
 void	apj_menu_relayout(int lock);
 void	apj_flush_wc_caches(void);
